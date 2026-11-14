@@ -3,6 +3,7 @@
 static inline void outb(u16 p, u8 v) { __asm__ volatile("outb %0,%1" : : "a"(v), "Nd"(p)); }
 static inline void outw(u16 p, u16 v) { __asm__ volatile("outw %0,%1" : : "a"(v), "Nd"(p)); }
 static inline u8 inb(u16 p) { u8 v; __asm__ volatile("inb %1,%0" : "=a"(v) : "Nd"(p)); return v; }
+static inline u16 inw(u16 p) { u16 v; __asm__ volatile("inw %1,%0" : "=a"(v) : "Nd"(p)); return v; }
 
 static volatile u32 g_ms;
 static u8 *fb; static int pitch, W, H; static u32 *bbuf;
@@ -11,7 +12,7 @@ void exc_panic(void) {
     for (int i = 0; fb && i < H; i++) { u32 *r = (u32 *)(fb + i * pitch); for (int x = 0; x < W; x++) r[x] = 0xAA0000; }
     for (;;) __asm__ volatile("hlt");
 }
-extern void isr_timer(void), isr_exc(void);
+extern void isr_timer(void), isr_exc(void), isr_kbd(void), isr_mouse(void);
 struct __attribute__((packed)) IdtE { u16 lo, sel; u8 zero, flags; u16 hi; };
 static struct IdtE idt[256];
 static struct __attribute__((packed)) { u16 lim; u32 base; } idtr;
@@ -21,8 +22,9 @@ static void idt_set(int n, void (*h)(void)) { u32 a = (u32)(uintptr_t)h; idt[n] 
 static const char kn[] = "\0\033" "1234567890-=" "\b\t" "qwertyuiop[]" "\n\0" "asdfghjkl;'`" "\0\\" "zxcvbnm,./" "\0*\0 ";
 static const char ks[] = "\0\033" "!@#$%^&*()_+" "\b\t" "QWERTYUIOP{}" "\n\0" "ASDFGHJKL:\"~" "\0|" "ZXCVBNM<>?" "\0*\0 ";
 static int mods, caps, ext;
-static Event q[64]; static int qh, qt;
-static void push(Event e) { int n = (qt + 1) & 63; if (n != qh) { q[qt] = e; qt = n; } }
+#define QN 256                                          /* power of two */
+static Event q[QN]; static volatile int qh, qt;       /* filled from IRQ1/IRQ12 (or the poll fallback), drained by the main loop */
+static void push(Event e) { int n = (qt + 1) & (QN - 1); if (n != qh) { q[qt] = e; qt = n; } }
 static void pushkey(int k) { push((Event){ EV_KEY, 0, 0, 0, k, mods }); }
 static void kbd_byte(u8 sc) {
     if (sc == 0xE0) { ext = 1; return; }
@@ -54,15 +56,33 @@ static void wait_in(void) { for (int i = 0; i < 100000 && (inb(0x64) & 2); i++);
 static int wait_out(void) { for (int i = 0; i < 100000; i++) if (inb(0x64) & 1) return 1; return 0; }
 static void mouse_cmd(u8 v) { wait_in(); outb(0x64, 0xD4); wait_in(); outb(0x60, v); if (wait_out()) inb(0x60); }
 static void mouse_init(void) {
-    wait_in(); outb(0x64, 0xA8);
+    /* Extra initialization for VirtualBox compatibility */
+    wait_in(); outb(0x64, 0xAD);  /* Disable keyboard */
+    wait_in(); outb(0x64, 0xA8);  /* Enable aux port */
     wait_in(); outb(0x64, 0x20); wait_out(); u8 st = inb(0x60);
-    st |= 2; st &= ~0x20;
+    st |= 3; st &= ~0x20;  /* Enable IRQ12 and IRQ1 */
     wait_in(); outb(0x64, 0x60); wait_in(); outb(0x60, st);
+    
+    /* Reset mouse */
+    mouse_cmd(0xFF);
+    for (int i = 0; i < 100000; i++);  /* Delay */
+    if (wait_out()) inb(0x60);  /* Clear ACK */
+    if (wait_out()) inb(0x60);  /* Clear self-test result */
+    
+    /* Set defaults and enable */
     mouse_cmd(0xF6);
-    mouse_cmd(0xF3); mouse_cmd(200); mouse_cmd(0xF3); mouse_cmd(100); mouse_cmd(0xF3); mouse_cmd(80);   /* IntelliMouse wheel */
-    wait_in(); outb(0x64, 0xD4); wait_in(); outb(0x60, 0xF2); wait_out(); inb(0x60);
-    if (wait_out() && inb(0x60) == 3) mouse_len = 4;
     mouse_cmd(0xF4);
+    
+    /* Try to enable wheel support */
+    mouse_cmd(0xF3); mouse_cmd(200); 
+    mouse_cmd(0xF3); mouse_cmd(100); 
+    mouse_cmd(0xF3); mouse_cmd(80);
+    wait_in(); outb(0x64, 0xD4); wait_in(); outb(0x60, 0xF2); 
+    wait_out(); inb(0x60);
+    if (wait_out() && inb(0x60) == 3) mouse_len = 4;
+    
+    wait_in(); outb(0x64, 0xAE);  /* Re-enable keyboard */
+    
     mx = W / 2; my = H / 2;
 }
 static void mouse_byte(u8 b) {
@@ -72,8 +92,10 @@ static void mouse_byte(u8 b) {
     mi = 0;
     int dx = mpk[1] - ((mpk[0] << 4) & 0x100), dy = mpk[2] - ((mpk[0] << 3) & 0x100);
     mx = CLAMP(mx + dx, 0, W - 1); my = CLAMP(my - dy, 0, H - 1);
-    push((Event){ EV_MOVE, mx, my, 0, 0, mods });
     int nb = mpk[0] & 7;
+    int last = (qt - 1) & (QN - 1);
+    if (nb == mbtn && qt != qh && q[last].type == EV_MOVE) { q[last].x = mx; q[last].y = my; }   /* merge into the pending move */
+    else push((Event){ EV_MOVE, mx, my, 0, 0, mods });
     for (int i = 0; i < 3; i++) {
         int m = 1 << i;
         if ((nb & m) != (mbtn & m)) push((Event){ (nb & m) ? EV_DOWN : EV_UP, mx, my, m, 0, mods });
@@ -81,10 +103,20 @@ static void mouse_byte(u8 b) {
     mbtn = nb;
     if (mouse_len == 4) { int z = mpk[3] & 0xF; if (z) { if (z & 8) z -= 16; push((Event){ EV_WHEEL, mx, my, 0, -z, mods }); } }
 }
+/* Drain the PS/2 controller. Runs with interrupts off (inside the ISR, or under cli in hal_next_event). */
+static void ps2_drain(void) {
+    for (int n = 0; n < 64; n++) {
+        u8 st = inb(0x64);
+        if (!(st & 1)) break;
+        u8 b = inb(0x60);
+        if (st & 0x20) mouse_byte(b); else kbd_byte(b);
+    }
+}
+void ps2_irq(void) { ps2_drain(); }                       /* called from isr_kbd / isr_mouse */
 bool hal_next_event(Event *e) {
-    for (int n = 0; n < 64 && (inb(0x64) & 1); n++) { u8 st = inb(0x64), b = inb(0x60); if (st & 0x20) mouse_byte(b); else kbd_byte(b); }
+    ps2_drain();
     if (qh == qt) return false;
-    *e = q[qh]; qh = (qh + 1) & 63;
+    *e = q[qh]; qh = (qh + 1) & (QN - 1);
     return true;
 }
 void hal_init(int *w, int *h, u32 **bb) {
@@ -102,6 +134,7 @@ void hal_init(int *w, int *h, u32 **bb) {
     outb(0x43, 0x34); outb(0x40, 4773 & 0xFF); outb(0x40, 4773 >> 8);       /* 250 Hz */
     while (inb(0x64) & 1) inb(0x60);
     mouse_init();
+    push((Event){ EV_MOVE, mx, my, 0, 0, mods });         /* draw the cursor at the centre from the first frame */
     __asm__ volatile("sti");
 }
 u32 hal_ms(void) { return g_ms; }
@@ -123,3 +156,64 @@ void hal_reboot(void) {
     wait_in(); outb(0x64, 0xFE);
     idtr.lim = 0; __asm__ volatile("lidt %0; int3" : : "m"(idtr));
 }
+
+/* ---- ATA disk I/O (primary master, LBA28, PIO) ----
+ * Built so it can never hang the machine:
+ *  - the drive is probed ONCE; if there is no plain ATA disk on the primary channel (floppy boot, SATA/NVMe
+ *    attach, empty VM, ...) every later call returns false immediately without touching the ports
+ *  - every wait is bounded by both a tick count and an iteration cap
+ *  - sectors below ATA_RESERVED (boot sector + kernel) are read-only, so a save can never overwrite the OS */
+#define ATA_RESERVED 2048
+static int ata_state;                                      /* 0 = not probed, 1 = usable, -1 = absent */
+static u32 ata_sectors;
+static bool ata_poll(u8 mask, u8 want, u32 ms) {           /* wait for (status & mask) == want */
+    u32 t0 = g_ms;
+    for (int i = 0; i < 5000; i++) {
+        u8 st = inb(0x1F7);
+        if ((st & mask) == want) return true;
+        if (!(st & 0x80) && (st & 0x21)) return false;     /* ERR / DF */
+        if (g_ms - t0 > ms) return false;
+    }
+    return false;
+}
+static bool ata_probe(void) {
+    if (ata_state) return ata_state > 0;
+    ata_state = -1;
+    outb(0x1F6, 0xA0);
+    for (int i = 0; i < 4; i++) inb(0x3F6);                /* 400 ns settle */
+    u8 st = inb(0x1F7);
+    if (st == 0xFF || st == 0x00) return false;            /* floating bus / empty channel */
+    outb(0x3F6, 0x02);                                     /* nIEN: polled only */
+    outb(0x1F2, 0); outb(0x1F3, 0); outb(0x1F4, 0); outb(0x1F5, 0);
+    outb(0x1F7, 0xEC);                                     /* IDENTIFY */
+    for (int i = 0; i < 4; i++) inb(0x3F6);
+    if (inb(0x1F7) == 0) return false;
+    if (!ata_poll(0x80, 0x00, 100)) return false;
+    if (inb(0x1F4) || inb(0x1F5)) return false;            /* ATAPI / SATA signature: not a plain ATA disk */
+    if (!ata_poll(0x08, 0x08, 100)) return false;
+    u16 id[256];
+    for (int i = 0; i < 256; i++) id[i] = inw(0x1F0);
+    u32 n = (u32)id[60] | ((u32)id[61] << 16);
+    if (n < ATA_RESERVED + 64) return false;               /* too small to hold saved data */
+    ata_sectors = n; ata_state = 1;
+    return true;
+}
+static bool ata_xfer(u32 lba, void *buf, int count, bool wr) {
+    if (count <= 0 || count > 256 || !ata_probe() || lba + (u32)count > ata_sectors) return false;
+    if (wr && lba < ATA_RESERVED) return false;            /* never overwrite boot sector / kernel */
+    u8 *b = (u8 *)buf;
+    for (int s = 0; s < count; s++, lba++, b += 512) {
+        if (!ata_poll(0x80, 0x00, 100)) return false;
+        outb(0x1F6, (u8)(0xE0 | ((lba >> 24) & 0x0F)));
+        outb(0x1F2, 1); outb(0x1F3, (u8)lba); outb(0x1F4, (u8)(lba >> 8)); outb(0x1F5, (u8)(lba >> 16));
+        outb(0x1F7, wr ? 0x30 : 0x20);
+        if (!ata_poll(0x88, 0x08, 100)) return false;      /* BSY clear, DRQ set */
+        if (wr) { for (int i = 0; i < 256; i++) outw(0x1F0, (u16)(b[2 * i] | (b[2 * i + 1] << 8))); }
+        else    { for (int i = 0; i < 256; i++) { u16 v = inw(0x1F0); b[2 * i] = (u8)v; b[2 * i + 1] = (u8)(v >> 8); } }
+        if (wr && !ata_poll(0x80, 0x00, 100)) return false;
+    }
+    if (wr) { outb(0x1F7, 0xE7); ata_poll(0x80, 0x00, 200); }   /* flush cache */
+    return true;
+}
+bool hal_disk_read(u32 sector, void *buf, int count) { return ata_xfer(sector, buf, count, false); }
+bool hal_disk_write(u32 sector, const void *buf, int count) { return ata_xfer(sector, (void *)buf, count, true); }

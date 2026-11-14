@@ -21,6 +21,7 @@ build/boot.bin: src/boot.S build/kernel.bin
 	ld -m elf_i386 -Ttext 0x7C00 --oformat binary -o build/boot.bin build/boot.o
 build/wimboes.img: build/boot.bin build/kernel.bin
 	cat build/boot.bin build/kernel.bin > $@
+	truncate -s 32M $@
 	@echo "built $@ ($$(stat -c %s $@) bytes)"
 run: build/wimboes.img
 	qemu-system-i386 -drive file=build/wimboes.img,format=raw -m 128 -vga std -no-reboot
@@ -29,7 +30,7 @@ run-kvm: build/wimboes.img
 vdi: build/wimboes.img
 	qemu-img convert -O vdi build/wimboes.img build/wimboes.vdi
 test:
-	./test/run.sh
+	sh ./test/run.sh
 clean:
 	rm -rf build
 .PHONY: all run run-kvm vdi test clean

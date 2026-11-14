@@ -7,7 +7,7 @@
 #include <stdbool.h>
 #include <stdarg.h>
 
-typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef int32_t i32;
+typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef int16_t i16; typedef int32_t i32;
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #define MAX(a,b) ((a)>(b)?(a):(b))
 #define CLAMP(v,lo,hi) ((v)<(lo)?(lo):((v)>(hi)?(hi):(v)))
@@ -53,6 +53,10 @@ void hal_rtc(RtcTime *t);
 void hal_idle(void);
 void hal_poweroff(void);
 void hal_reboot(void);
+
+/* Disk I/O (ATA PIO mode) */
+bool hal_disk_read(u32 sector, void *buf, int count);   /* read count sectors */
+bool hal_disk_write(u32 sector, const void *buf, int count);
 
 /* ---------------------------------------------------------------- font / gfx */
 typedef struct {
@@ -111,6 +115,13 @@ bool fs_rename(int node, const char *name);
 bool fs_is_under(int node, int ancestor);
 bool fs_trash(int node);                                 /* move to Recycle Bin (or delete if already there) */
 int  fs_bin(void);
+bool fs_save(void);                                      /* save filesystem to disk */
+bool fs_load(void);                                      /* load filesystem from disk */
+/* Saves are deferred: changes only mark the data dirty; os_tick flushes it a moment later, so a click or
+   keystroke never waits on disk I/O. */
+void persist_mark(void);
+void persist_clear(void);
+void persist_flush(bool force);
 
 /* ---------------------------------------------------------------- users */
 #define MAX_USERS 8
@@ -123,13 +134,15 @@ int  user_count(void);
 int  user_find(const char *name);
 int  user_nth(int n);
 int  user_docs(int idx);  int user_desktop(int idx);
+bool users_save(void);                                   /* save users to disk */
+bool users_load(void);                                   /* load users from disk */
 
 /* ---------------------------------------------------------------- ui */
 extern u32 g_accent;
 extern bool g_clock24;
 enum { ICON_FOLDER, ICON_PC, ICON_BIN, ICON_NOTEPAD, ICON_CALC, ICON_PAINT, ICON_TERM, ICON_GEAR,
        ICON_TASKMGR, ICON_FILE, ICON_DRIVE, ICON_USER, ICON_POWER, ICON_LOGO, ICON_SEARCH,
-       ICON_DOCS, ICON_PLUS, ICON_BACK, ICON_UP, ICON_NEWFOLDER, ICON_TRASH, ICON_CALENDAR };
+       ICON_DOCS, ICON_PLUS, ICON_BACK, ICON_UP, ICON_NEWFOLDER, ICON_TRASH, ICON_CALENDAR, ICON_GAME };
 void icon_draw(int kind, int x, int y, int size);
 void avatar_draw(int cx, int cy, int r, u32 color);
 void logo_draw(int x, int y, int size, u32 color);
@@ -155,6 +168,10 @@ typedef struct Window {
     int x, y, w, h, rx, ry, rw, rh, minw, minh;
     char title[64]; int icon, app, id;
     void *priv;
+    /* Animation state */
+    float anim_x, anim_y, anim_w, anim_h, anim_alpha;
+    u32 anim_start;
+    bool animating;
     void (*draw)(struct Window *, int cx, int cy, int cw, int ch);
     void (*mouse)(struct Window *, int ev, int x, int y, int btn);   /* client-relative */
     void (*key)(struct Window *, int key, int mod);
@@ -199,6 +216,7 @@ bool os_tick(void);                                      /* true => needs redraw
 void win_cascade(int *x, int *y);
 void wallpaper_make(int kind);
 extern int g_wallpaper;
+extern int g_shell_style;
 void os_signout(void);
 void os_shutdown(bool restart);
 bool os_running(void);

@@ -27,6 +27,10 @@ Window *wm_create(int app, const char *title, int icon, int x, int y, int w, int
     W->x = W->rx = x; W->y = W->ry = y; W->w = W->rw = w; W->h = W->rh = h;
     W->minw = 260; W->minh = 180;
     kstrcpy(W->title, title, sizeof W->title);
+    /* Initialize animation */
+    W->anim_x = x + w / 2.0f; W->anim_y = y + h / 2.0f;
+    W->anim_w = 0; W->anim_h = 0; W->anim_alpha = 0;
+    W->animating = true; W->anim_start = hal_ms();
     order[norder++] = slot;
     return W;
 }
@@ -112,26 +116,56 @@ static void draw_controls(Window *w, bool active) {
     }
 }
 static void draw_window(Window *w, bool active) {
-    int x = w->x, y = w->y, ww = w->w, hh = w->h;
-    if (!w->maximized) {
+    /* Update animation */
+    if (w->animating) {
+        u32 ms = hal_ms();
+        float t = (ms - w->anim_start) / 200.0f;
+        if (t >= 1.0f) { t = 1.0f; w->animating = false; }
+        float ease = t * t * (3.0f - 2.0f * t); /* smoothstep */
+        w->anim_x = w->x + (w->anim_x - w->x) * (1.0f - ease);
+        w->anim_y = w->y + (w->anim_y - w->y) * (1.0f - ease);
+        w->anim_w = w->w * ease;
+        w->anim_h = w->h * ease;
+        w->anim_alpha = ease;
+    } else {
+        w->anim_x = (float)w->x; w->anim_y = (float)w->y;
+        w->anim_w = (float)w->w; w->anim_h = (float)w->h;
+        w->anim_alpha = 1.0f;
+    }
+    
+    int x = (int)w->anim_x, y = (int)w->anim_y;
+    int ww = (int)w->anim_w, hh = (int)w->anim_h;
+    int alpha = (int)(w->anim_alpha * 255);
+    
+    if (ww < 10 || hh < 10) return;
+    
+    if (!w->maximized && !w->animating) {
         for (int d = 1; d <= 9; d++) {          /* cheap soft shadow: concentric rings */
             int a = active ? 34 - d * 3 : 20 - d * 2;
             if (a <= 0) break;
+            a = a * alpha / 255;
             gfx_rect_a(x - d, y - d + 3, ww + 2 * d, 1, 0x000000, a);
             gfx_rect_a(x - d, y + hh + d + 2, ww + 2 * d, 1, 0x000000, a);
             gfx_rect_a(x - d, y - d + 4, 1, hh + 2 * d - 1, 0x000000, a);
             gfx_rect_a(x + ww + d - 1, y - d + 4, 1, hh + 2 * d - 1, 0x000000, a);
         }
     }
-    gfx_rect(x, y, ww, hh, 0xFFFFFF);
-    icon_draw(w->icon, x + 9, y + 8, 16);
-    char t[64]; text_fit(&font_ui, w->title, ww - 32 - 138 - 8, t, sizeof t);
-    text_draw(&font_ui, x + 32, y + (TITLE_H - font_ui.h) / 2, t, active ? 0x000000 : 0x808080);
-    draw_controls(w, active);
+    if (alpha < 255) gfx_rect_a(x, y, ww, hh, 0xFFFFFF, alpha);
+    else gfx_rect(x, y, ww, hh, 0xFFFFFF);
+    
+    if (hh > TITLE_H) {
+        icon_draw(w->icon, x + 9, y + 8, 16);
+        char t[64]; text_fit(&font_ui, w->title, ww - 32 - 138 - 8, t, sizeof t);
+        text_draw(&font_ui, x + 32, y + (TITLE_H - font_ui.h) / 2, t, active ? 0x000000 : 0x808080);
+        draw_controls(w, active);
+    }
+    
     int cx = x + 1, cy = y + TITLE_H, cw = ww - 2, ch = hh - TITLE_H - 1;
-    Clip o = gfx_clip_push(cx, cy, cw, ch);
-    if (w->draw) w->draw(w, cx, cy, cw, ch);
-    gfx_clip_pop(o);
+    if (ch > 0) {
+        Clip o = gfx_clip_push(cx, cy, cw, ch);
+        if (w->draw) w->draw(w, cx, cy, cw, ch);
+        gfx_clip_pop(o);
+    }
     gfx_frame(x, y, ww, hh, active ? g_accent : 0xAAAAAA);
 }
 void wm_draw_all(void) {

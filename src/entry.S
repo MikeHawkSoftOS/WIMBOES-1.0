@@ -31,6 +31,25 @@ isr_timer:
     out %al, $0x20
     popa
     iret
+    .global isr_kbd
+isr_kbd:
+    pusha
+    cld
+    call ps2_irq
+    mov $0x20, %al
+    out %al, $0x20
+    popa
+    iret
+    .global isr_mouse
+isr_mouse:
+    pusha
+    cld
+    call ps2_irq
+    mov $0x20, %al
+    out %al, $0xA0
+    out %al, $0x20
+    popa
+    iret
     .global isr_exc
 isr_exc:
     cli

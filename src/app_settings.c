@@ -5,7 +5,8 @@ typedef struct { int page; TextInput name, pass; int focus; char msg[48]; } Set;
 static const char *const pages[5] = { "Home", "System", "Personalization", "Accounts", "Time & Language" };
 static const char *const desc[5] = { "", "Display, about", "Colors, background", "Your accounts, add users", "Clock format" };
 static const u32 accents[8] = { 0x0078D7, 0x0099BC, 0x10893E, 0xF7630C, 0xE74856, 0xE3008C, 0x881798, 0x69797E };
-static const char *const wall_names[3] = { "Glow", "Waves", "Dusk" };
+static const char *const wall_names[3] = { "Midnight", "Aurora", "Dusk" };
+static const char *const shell_names[3] = { "macOS", "Windows 11", "Windows 10" };
 
 static void go(Window *w, int p) { Set *s = w->priv; s->page = p; s->msg[0] = 0; char t[48]; ksnprintf(t, sizeof t, "Settings%s%s", p ? " - " : "", p ? pages[p] : ""); wm_set_title(w, t); }
 static void row(int x, int y, const char *k, const char *v) { text_draw(&font_ui, x, y, k, 0x666666); text_draw(&font_ui_b, x + 170, y, v, 0x000000); }
@@ -47,13 +48,22 @@ static void st_draw(Window *w, int cx, int cy, int cw, int ch) {
             if (accents[i] == g_accent) gfx_frame(x + i * 44 - 3, y - 3, 42, 42, 0x000000);
             else if (ui_hover(w, x + i * 44, y, 36, 36)) gfx_frame(x + i * 44 - 2, y - 2, 40, 40, 0x888888);
         }
-        y += 64; text_draw(&font_ui_b, x, y, "Background", 0x000000); y += 28;
+        y += 64; text_draw(&font_ui_b, x, y, "Desktop & login background", 0x000000); y += 28;
         static const u32 th[3][2] = { { 0x0A3C78, 0x35B5FF }, { 0x005A6A, 0x00D6B0 }, { 0x14141E, 0x6B4FA0 } };
         for (int i = 0; i < 3; i++) {
             gfx_gradient(x + i * 130, y, 118, 74, th[i][0], th[i][1]);
             if (g_wallpaper == i) gfx_frame(x + i * 130 - 3, y - 3, 124, 80, g_accent);
             text_draw_c(&font_ui, x + i * 130, 118, y + 80, wall_names[i], 0x000000);
         }
+        y += 112;
+        text_draw(&font_ui_b, x, y, "Desktop style", 0x000000); y += 28;
+        for (int i = 0; i < 3; i++) {
+            int sx = x + i * 130;
+            gfx_rect(sx, y, 118, 48, g_shell_style == i ? 0xE3F0FC : 0xF0F0F0);
+            gfx_frame(sx, y, 118, 48, g_shell_style == i ? g_accent : 0xD0D0D0);
+            text_draw_c(&font_ui, sx, 118, y + 16, shell_names[i], 0x222222);
+        }
+        text_draw(&font_small, x, y + 58, "Changes the desktop and taskbar layout.", 0x666666);
     } else if (s->page == 3) {
         for (int i = 0; i < MAX_USERS; i++) {
             if (!g_users[i].used) continue;
@@ -84,6 +94,8 @@ static void st_mouse(Window *w, int ev, int x, int y, int btn) {
     if (s->page == 2) {
         for (int i = 0; i < 8; i++) if (in_rect(x, y, bx + i * 44, by + 28, 36, 36)) g_accent = accents[i];
         for (int i = 0; i < 3; i++) if (in_rect(x, y, bx + i * 130, by + 28 + 64 + 28, 118, 74)) wallpaper_make(i);
+        int sty = by + 28 + 64 + 28 + 74 + 66;
+        for (int i = 0; i < 3; i++) if (in_rect(x, y, bx + i * 130, sty, 118, 48)) g_shell_style = i;
     } else if (s->page == 3) {
         int yy = by;
         for (int i = 0; i < MAX_USERS; i++) {

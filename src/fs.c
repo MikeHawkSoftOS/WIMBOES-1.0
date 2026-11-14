@@ -59,6 +59,7 @@ bool fs_write(int node, const char *data, int len) {
     memcpy(d, data, (size_t)len); d[len] = 0;
     if (g_fs[node].data) kfree(g_fs[node].data);
     g_fs[node].data = d; g_fs[node].size = len;
+    persist_mark();  /* deferred save */
     return true;
 }
 void fs_path(int node, char *buf, int cap) {
@@ -124,5 +125,126 @@ bool fs_trash(int node) {
     for (int n = 2; fs_find(bin, nm) >= 0 && n < 100; n++) ksnprintf(nm, sizeof nm, "%s (%d)", g_fs[node].name, n);
     kstrcpy(g_fs[node].name, nm, FS_NAME);
     g_fs[node].parent = bin;
+    return true;
+}
+
+/* ------------------------------------------------------------ disk persistence */
+/* Saved data lives past the first 1 MB, far from the boot sector + kernel (sectors 0..~340). hal_disk_write also
+   refuses anything below sector 2048. Users are at 2048 (see users.c), the filesystem starts here: */
+#define FS_DISK_SECTOR 2064
+
+static bool g_dirty; static u32 g_dirty_ms;
+void persist_mark(void) { if (!g_dirty) { g_dirty = true; g_dirty_ms = hal_ms(); } }
+void persist_clear(void) { g_dirty = false; }
+void persist_flush(bool force) {
+    if (!g_dirty || (!force && hal_ms() - g_dirty_ms < 1500)) return;
+    g_dirty = false;
+    users_save(); fs_save();
+}
+
+bool fs_save(void) {
+    /* Save filesystem metadata (nodes without file data) */
+    char buf[512 * 8];
+    memset(buf, 0, sizeof buf);
+    
+    /* Header: magic + version */
+    buf[0] = 'W'; buf[1] = 'F'; buf[2] = 'S'; buf[3] = 1;
+    int *count_ptr = (int *)(buf + 4);
+    *count_ptr = 0;
+    
+    int offset = 8;
+    for (int i = 0; i < FS_MAX && offset + 128 < (int)sizeof buf; i++) {
+        if (!g_fs[i].used) continue;
+        
+        /* Pack node: used(1) dir(1) parent(2) name(28) size(4) = 36 bytes base */
+        char *node_data = buf + offset;
+        node_data[0] = g_fs[i].used ? 1 : 0;
+        node_data[1] = g_fs[i].dir ? 1 : 0;
+        *(i16 *)(node_data + 2) = (i16)g_fs[i].parent;
+        memcpy(node_data + 4, g_fs[i].name, FS_NAME);
+        *(i32 *)(node_data + 32) = g_fs[i].size;
+        *(i16 *)(node_data + 36) = (i16)i;               /* node index */
+        offset += 38;
+        (*count_ptr)++;
+    }
+    
+    /* Write metadata to disk sectors 100-107 */
+    if (!hal_disk_write(FS_DISK_SECTOR, buf, 8)) return false;
+    
+    /* Save file contents to subsequent sectors */
+    int file_sector = FS_DISK_SECTOR + 10;
+    for (int i = 0; i < FS_MAX; i++) {
+        if (!g_fs[i].used || g_fs[i].dir || !g_fs[i].data || g_fs[i].size == 0) continue;
+        
+        /* Write file data */
+        int sectors = (g_fs[i].size + 511) / 512;
+        char file_buf[512 * 16];
+        memset(file_buf, 0, sizeof file_buf);
+        memcpy(file_buf, g_fs[i].data, (size_t)g_fs[i].size);
+        
+        if (sectors > 16) sectors = 16;              /* limit file size for persistence */
+        if (!hal_disk_write(file_sector, file_buf, sectors)) return false;
+        
+        file_sector += sectors;
+    }
+    
+    return true;
+}
+
+bool fs_load(void) {
+    char buf[512 * 8];
+    
+    /* Read metadata */
+    if (!hal_disk_read(FS_DISK_SECTOR, buf, 8)) return false;
+    
+    /* Check magic */
+    if (buf[0] != 'W' || buf[1] != 'F' || buf[2] != 'S') return false;
+    
+    int count = *(int *)(buf + 4);
+    if (count < 0 || count > FS_MAX) return false;
+    
+    /* Clear current filesystem */
+    for (int i = 1; i < FS_MAX; i++) {
+        if (g_fs[i].data) kfree(g_fs[i].data);
+        memset(&g_fs[i], 0, sizeof g_fs[i]);
+    }
+    
+    /* Restore nodes */
+    int offset = 8;
+    for (int n = 0; n < count && offset + 38 <= (int)sizeof buf; n++) {
+        char *node_data = buf + offset;
+        int idx = *(i16 *)(node_data + 36);
+        
+        if (idx > 0 && idx < FS_MAX) {
+            g_fs[idx].used = node_data[0] != 0;
+            g_fs[idx].dir = node_data[1] != 0;
+            g_fs[idx].parent = *(i16 *)(node_data + 2);
+            memcpy(g_fs[idx].name, node_data + 4, FS_NAME);
+            g_fs[idx].size = *(i32 *)(node_data + 32);
+            g_fs[idx].data = 0;                      /* will load file data next */
+        }
+        offset += 38;
+    }
+    
+    /* Load file contents */
+    int file_sector = FS_DISK_SECTOR + 10;
+    for (int i = 0; i < FS_MAX; i++) {
+        if (!g_fs[i].used || g_fs[i].dir || g_fs[i].size == 0) continue;
+        
+        int sectors = (g_fs[i].size + 511) / 512;
+        if (sectors > 16) sectors = 16;
+        
+        char file_buf[512 * 16];
+        if (!hal_disk_read(file_sector, file_buf, sectors)) continue;
+        
+        g_fs[i].data = kmalloc((size_t)g_fs[i].size + 1);
+        if (g_fs[i].data) {
+            memcpy(g_fs[i].data, file_buf, (size_t)g_fs[i].size);
+            g_fs[i].data[g_fs[i].size] = 0;
+        }
+        
+        file_sector += sectors;
+    }
+    
     return true;
 }

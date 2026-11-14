@@ -1,11 +1,24 @@
 /* The shell: boot splash, login, desktop, taskbar, Start menu, shutdown. */
 #include "os.h"
 
-enum { S_BOOT, S_LOGIN, S_WELCOME, S_DESKTOP, S_SHUTDOWN, S_HALTED };
+enum { S_BOOT, S_SETUP, S_LOGIN, S_WELCOME, S_DESKTOP, S_SHUTDOWN, S_HALTED };
 static int state; static u32 t0; static bool restart_req;
 static u32 *wall; int g_wallpaper;
 static RtcTime rtc; static u32 rtc_ms = ~0u;
 static u32 last_ph;
+static u32 state_t; static int prev_state = -1;           /* when the current screen was entered */
+static bool anim_busy; static int anim_dt; static u32 last_anim;
+static int tb_off, sm_off, sm_prog;                       /* taskbar slide-in, start menu slide */
+static u32 *wall_blur; static u32 login_shake_t;
+int g_shell_style = 1; /* 0 macOS-like, 1 Windows 11, 2 Windows 10 */
+static int sm_scroll;
+static int approach(int cur, int tgt, int ms) {
+    int d = tgt - cur; if (!d) return cur;
+    int st = d * anim_dt / ms; if (!st) st = d > 0 ? 1 : -1;
+    if ((d > 0 && st > d) || (d < 0 && st < d)) st = d;
+    if (cur + st != tgt) anim_busy = true;
+    return cur + st;
+}
 
 const AppDef g_apps[APP_COUNT] = {
     [APP_EXPLORER] = { "File Explorer", ICON_FOLDER, true },
@@ -40,40 +53,122 @@ void win_cascade(int *x, int *y) {
 }
 
 /* ------------------------------------------------------------ wallpaper */
+static u32 isqrt(u32 n) {
+    u32 r = 0, bit = 1u << 30;
+    while (bit > n) bit >>= 2;
+    while (bit) { if (n >= r + bit) { n -= r + bit; r = (r >> 1) + bit; } else r >>= 1; bit >>= 2; }
+    return r;
+}
+
+/* anti-aliased translucent rounded rectangle */
+static void rrect_a(int x, int y, int w, int h, int r, u32 c, int a) {
+    if (r * 2 > h) r = h / 2;
+    if (r * 2 > w) r = w / 2;
+    for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
+        int dx = i < r ? r - 1 - i : (i > w - 1 - r ? i - (w - r) : -1);
+        int dy = j < r ? r - 1 - j : (j > h - 1 - r ? j - (h - r) : -1);
+        int al = a;
+        if (dx >= 0 && dy >= 0) {
+            int d16 = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+            int cv = CLAMP(r * 16 - d16 + 8, 0, 16);
+            al = a * cv / 16;
+        }
+        if (al > 0) gfx_pixel(x + i, y + j, c, al);
+    }
+}
+
+/* blurred copy of the wallpaper for the login screen */
+static void blur_pass(const u32 *s, u32 *d, int w, int h, int horiz) {
+    for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+        int r = 0, g = 0, b = 0;
+        for (int k = -2; k <= 2; k++) {
+            int xx = horiz ? CLAMP(x + k, 0, w - 1) : x, yy = horiz ? y : CLAMP(y + k, 0, h - 1);
+            u32 c = s[yy * w + xx]; r += (int)(c >> 16 & 255); g += (int)(c >> 8 & 255); b += (int)(c & 255);
+        }
+        d[y * w + x] = (u32)((r / 5) << 16 | (g / 5) << 8 | (b / 5));
+    }
+}
+static int lerp8(int a, int b, int f) { return a + (b - a) * f / 256; }
+static void wallpaper_blur(u32 *src) {
+    int w = g_w, h = g_h, sw = w / 8 + 1, sh = h / 8 + 1;
+    if (!wall_blur) wall_blur = kmalloc((size_t)w * h * 4);
+    u32 *s = kmalloc((size_t)sw * sh * 4), *t = kmalloc((size_t)sw * sh * 4);
+    if (!wall_blur || !s || !t) { if (wall_blur) { kfree(wall_blur); wall_blur = 0; } kfree(s); kfree(t); return; }
+    for (int sy = 0; sy < sh; sy++) for (int sx = 0; sx < sw; sx++) {
+        int r = 0, g = 0, b = 0, n = 0;
+        for (int j = 0; j < 8; j += 2) for (int i = 0; i < 8; i += 2) {
+            u32 c = src[MIN(sy * 8 + j, h - 1) * w + MIN(sx * 8 + i, w - 1)];
+            r += (int)(c >> 16 & 255); g += (int)(c >> 8 & 255); b += (int)(c & 255); n++;
+        }
+        s[sy * sw + sx] = (u32)((r / n) << 16 | (g / n) << 8 | (b / n));
+    }
+    for (int n = 0; n < 3; n++) { blur_pass(s, t, sw, sh, 1); blur_pass(t, s, sw, sh, 0); }
+    for (int y = 0; y < h; y++) {
+        int sy = y >> 3, fy = (y & 7) * 32, sy1 = MIN(sy + 1, sh - 1);
+        for (int x = 0; x < w; x++) {
+            int sx = x >> 3, fx = (x & 7) * 32, sx1 = MIN(sx + 1, sw - 1);
+            u32 a = s[sy * sw + sx], b = s[sy * sw + sx1], c = s[sy1 * sw + sx], e = s[sy1 * sw + sx1];
+            u32 out = 0;
+            for (int sh2 = 16; sh2 >= 0; sh2 -= 8) {
+                int top = lerp8((int)(a >> sh2 & 255), (int)(b >> sh2 & 255), fx);
+                int bot = lerp8((int)(c >> sh2 & 255), (int)(e >> sh2 & 255), fx);
+                out |= (u32)lerp8(top, bot, fy) << sh2;
+            }
+            wall_blur[y * w + x] = out;
+        }
+    }
+    kfree(s); kfree(t);
+}
 void wallpaper_make(int kind) {
     if (!wall) wall = kmalloc((size_t)g_w * g_h * 4);
     if (!wall) return;
     g_wallpaper = kind;
     int w = g_w, h = g_h;
-    int gx = w * 60 / 100, gy = h * 42 / 100, R = h * 90 / 100, S = h * 30 / 100, gap = h / 120 + 3;
+    
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
             u32 c;
             if (kind == 0) {
-                int dx = x - gx, dy = y - gy, ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
-                int d = MAX(ax, ay) + MIN(ax, ay) / 2;
-                int i = d < R ? (R - d) * 255 / R : 0; i = i * i / 255;
-                int t = x * 100 / w + y * 60 / h;                       /* 0..160 */
-                u32 base = (u32)((2 + t / 30) << 16 | (18 + t * 24 / 100) << 8 | (58 + t * 55 / 100));
-                c = col_blend(base, 0x35B5FF, i * 215 / 255);
-                int u = dx, v = dy + dx * 16 / 100, au = u < 0 ? -u : u, av = v < 0 ? -v : v;
-                if (au > gap / 2 && av > gap / 2 && au < S && av < S * 80 / 100)
-                    c = col_blend(c, 0xFFFFFF, 40 + i / 5 + (u < 0 ? 0 : 10));
-            } else if (kind == 1) {
-                int tri = ((x * 2 + y) & 255); tri = tri < 128 ? tri : 255 - tri;
-                int t = y * 255 / h;
-                c = (u32)((0 + t / 12) << 16 | (80 + t * 80 / 255) << 8 | (95 + t * 40 / 255));
-                int wave = h * 55 / 100 + tri / 3 + (x * 40 / w);
-                if (y > wave) c = col_blend(c, 0x00D6B0, 55);
-                if (y > wave + h / 6) c = col_blend(c, 0x003B4A, 70);
-            } else {
-                int dx = x - w / 2, dy = y - h / 2, ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
-                int d = MAX(ax, ay) + MIN(ax, ay) / 2, i = d < w / 2 ? (w / 2 - d) * 255 / (w / 2) : 0;
-                c = col_blend((u32)(0x14 << 16 | 0x14 << 8 | 0x1E), 0x6B4FA0, i / 3);
+                /* Clean slate: a restrained midnight gradient, no glowing logo. */
+                int t = (y * 150 / MAX(1, h)) + (x * 35 / MAX(1, w));
+                int r = 18 + t * 10 / 255, g = 27 + t * 22 / 255, b = 43 + t * 38 / 255;
+                int wave = (int)isqrt((u32)((x - w * 3 / 4) * (x - w * 3 / 4) +
+                                            (y - h / 3) * (y - h / 3)));
+                int glow = MAX(0, 70 - wave * 70 / MAX(1, w));
+                r = CLAMP(r + glow / 3, 0, 255); g = CLAMP(g + glow / 2, 0, 255);
+                b = CLAMP(b + glow, 0, 255);
+                c = (u32)(r << 16 | g << 8 | b);
+            }
+            else if (kind == 1) {
+                /* macOS style - purple/pink gradient */
+                int t = (y * 200 / h + x * 55 / w);
+                int r = 100 + t * 100 / 255;
+                int g = 50 + t * 80 / 255;
+                int b = 150 + t * 80 / 255;
+                
+                /* Noise texture */
+                int noise = ((x * 127 + y * 311) & 255) - 128;
+                r = CLAMP(r + noise / 32, 0, 255);
+                g = CLAMP(g + noise / 32, 0, 255);
+                b = CLAMP(b + noise / 32, 0, 255);
+                
+                c = (u32)(r << 16 | g << 8 | b);
+            }
+            else {
+                /* Dark theme */
+                int dx = x - w / 2, dy = y - h / 2;
+                int d = MAX((dx < 0 ? -dx : dx), (dy < 0 ? -dy : dy));
+                int i = d < w / 2 ? (w / 2 - d) * 50 / (w / 2) : 0;
+                
+                int r = 14 + i / 3;
+                int g = 14 + i / 3; 
+                int b = 24 + i / 2;
+                c = (u32)(r << 16 | g << 8 | b);
             }
             wall[y * w + x] = c;
         }
     }
+    wallpaper_blur(wall);
 }
 
 /* ------------------------------------------------------------ cursor */
@@ -106,14 +201,36 @@ static int sel_user;
 static char login_err[48];
 static bool power_popup;                 /* login screen power menu */
 
+/* Setup wizard state */
+static TextInput setup_name, setup_pass, setup_pass2;
+static int setup_step;  /* 0=welcome, 1=name, 2=password, 3=complete */
+static bool setup_is_admin;
+
 static void start_reset(void);
 static void desktop_reset(void);
 
 void os_init(void) {
     fs_init(); users_init();
+    
+    /* Try to load saved data from disk */
+    bool loaded_users = users_load();
+    bool loaded_fs = fs_load();
+    if (loaded_users && loaded_fs) persist_clear();      /* memory now matches the disk: nothing to write back */
+    
     wallpaper_make(0);
-    sel_user = user_nth(0);
-    state = S_BOOT; t0 = hal_ms();
+    
+    /* Check if we need setup (no users or failed to load) */
+    if (user_count() == 0 || !loaded_users) {
+        state = S_BOOT; t0 = hal_ms();
+        setup_step = 0; 
+        setup_is_admin = true;
+        setup_name.focus = true; setup_pass.pass = true; setup_pass2.pass = true;
+        ti_clear(&setup_name); ti_clear(&setup_pass); ti_clear(&setup_pass2);
+    } else {
+        sel_user = user_nth(0);
+        state = S_BOOT; t0 = hal_ms();
+    }
+    
     pw.pass = true; pw.focus = true;
 }
 bool os_running(void) { return state != S_HALTED; }
@@ -133,7 +250,7 @@ static void render_boot(void) {
     text_draw_c(&font_small, 0, g_w, g_h - 40, "MikeHawkSoft", 0x8A8A8A);
 }
 static void render_wall_dark(int a) {
-    memcpy(g_bb, wall, (size_t)g_w * g_h * 4);
+    memcpy(g_bb, wall_blur ? wall_blur : wall, (size_t)g_w * g_h * 4);
     gfx_rect_a(0, 0, g_w, g_h, 0x000000, a);
 }
 static void render_welcome(void) {
@@ -154,76 +271,181 @@ static void render_halted(void) {
     text_draw_c(&font_title, 0, g_w, g_h / 2 - 12, "It's now safe to turn off your computer.", 0xFF9A1F);
 }
 
-/* ------------------------------------------------------------ login */
-static int lg_cx(void) { return g_w / 2; }
-static int lg_field_y(void) { return g_h / 2 + 62; }
-static int lg_row_y(int i) { return g_h - 24 - (user_count() - i) * 60; }
-static void render_login(void) {
-    render_wall_dark(95);
-    User *u = &g_users[sel_user];
-    int cx = lg_cx();
-    avatar_draw(cx, g_h / 2 - 90, 64, u->color);
-    text_draw_c(&font_big, 0, g_w, g_h / 2 - 5, u->name, 0xFFFFFF);
-    int fy = lg_field_y();
-    if (u->pass[0]) {
-        pw.focus = true;
-        ti_draw(&pw, cx - 130, fy, 260, 36, "Password", ui_blink());
-        gfx_rect(cx + 130, fy, 36, 36, g_accent);
-        icon_draw(ICON_BACK, cx + 136, fy + 6, 24);           /* dark arrow -> lighten below */
-        gfx_rect(cx + 130, fy, 36, 36, g_accent);
-        gfx_line(cx + 139, fy + 18, cx + 157, fy + 18, 0xFFFFFF);
-        gfx_line(cx + 150, fy + 11, cx + 157, fy + 18, 0xFFFFFF); gfx_line(cx + 150, fy + 25, cx + 157, fy + 18, 0xFFFFFF);
-    } else {
-        bool hov = in_rect(g_mx, g_my, cx - 60, fy, 120, 36);
-        gfx_rect(cx - 60, fy, 120, 36, hov ? col_lighten(g_accent, 20) : g_accent);
-        text_draw_c(&font_ui, cx - 60, 120, fy + (36 - font_ui.h) / 2, "Sign in", 0xFFFFFF);
+/* ------------------------------------------------------------ Windows 11-style Setup Wizard */
+static void render_setup(void) {
+    gfx_rect(0, 0, g_w, g_h, 0xF3F3F3);
+    
+    int cx = g_w / 2, cy = g_h / 2;
+    
+    if (setup_step == 0) {
+        /* Welcome screen */
+        logo_draw(cx - 60, 100, 120, g_accent);
+        text_draw_c(&font_title, 0, g_w, 260, "Welcome to Wimboes", 0x000000);
+        text_draw_c(&font_ui, 0, g_w, 310, "Let's set up your device", 0x666666);
+        
+        bool next_btn = ui_button(0, cx - 80, cy + 80, 160, 44, "Get Started", true);
+        if (g_mb & 1 && next_btn) { setup_step = 1; g_mb = 0; }
     }
-    if (login_err[0]) text_draw_c(&font_ui, 0, g_w, fy + 50, login_err, 0xFFFFFF);
-    for (int n = 0, i = 0; n < MAX_USERS; n++) {
-        if (!g_users[n].used) continue;
-        int y = lg_row_y(i++);
-        bool hov = in_rect(g_mx, g_my, 16, y, 250, 52);
-        if (n == sel_user) gfx_rect_a(16, y, 250, 52, 0xFFFFFF, 40);
-        else if (hov) gfx_rect_a(16, y, 250, 52, 0xFFFFFF, 20);
-        avatar_draw(46, y + 26, 20, g_users[n].color);
-        text_draw_vc(&font_title, 78, y, 52, g_users[n].name, 0xFFFFFF);
+    else if (setup_step == 1) {
+        /* Name input */
+        text_draw_c(&font_title, 0, g_w, 150, "Who's going to use this device?", 0x000000);
+        text_draw_c(&font_ui, 0, g_w, 200, "Create an account to personalize your experience", 0x666666);
+        
+        setup_name.focus = true;
+        ti_draw(&setup_name, cx - 180, 280, 360, 48, "Your name", ui_blink());
+        
+        text_draw(&font_small, cx - 180, 340, "Administrator account", 0x666666);
+        bool toggle_clicked = ui_toggle(0, cx + 240, 335, setup_is_admin);
+        if ((g_mb & 1) && toggle_clicked) { setup_is_admin = !setup_is_admin; g_mb = 0; }
+        
+        bool next_btn = ui_button(0, cx + 60, cy + 120, 120, 44, "Next", true);
+        bool back_btn = ui_button(0, cx - 180, cy + 120, 120, 44, "Back", false);
+        
+        if ((g_mb & 1) && next_btn && setup_name.len > 0) { setup_step = 2; g_mb = 0; }
+        if ((g_mb & 1) && back_btn) { setup_step = 0; g_mb = 0; }
     }
-    bool ph = in_rect(g_mx, g_my, g_w - 64, g_h - 64, 40, 40);
-    if (ph || power_popup) gfx_rect_a(g_w - 64, g_h - 64, 40, 40, 0xFFFFFF, 30);
-    icon_draw(ICON_POWER, g_w - 56, g_h - 56, 24);
-    if (power_popup) {
-        int px = g_w - 64 - 130, py = g_h - 64 - 76;
-        gfx_rect(px, py, 170, 72, 0x2B2B2B);
-        const char *it[2] = { "Shut down", "Restart" };
-        for (int i = 0; i < 2; i++) {
-            if (in_rect(g_mx, g_my, px, py + i * 36, 170, 36)) gfx_rect(px, py + i * 36, 170, 36, 0x404040);
-            text_draw_vc(&font_ui, px + 14, py + i * 36, 36, it[i], 0xFFFFFF);
+    else if (setup_step == 2) {
+        /* Password input */
+        text_draw_c(&font_title, 0, g_w, 150, "Create a password", 0x000000);
+        text_draw_c(&font_ui, 0, g_w, 200, "Or leave blank for no password", 0x666666);
+        
+        setup_pass.focus = !setup_pass2.focus;
+        ti_draw(&setup_pass, cx - 180, 260, 360, 48, "Password", ui_blink());
+        ti_draw(&setup_pass2, cx - 180, 320, 360, 48, "Confirm password", ui_blink());
+        
+        bool match = strcmp(setup_pass.buf, setup_pass2.buf) == 0;
+        bool can_continue = (setup_pass.len == 0 && setup_pass2.len == 0) || (match && setup_pass.len > 0);
+        
+        if (!match && setup_pass2.len > 0) {
+            text_draw_c(&font_small, 0, g_w, 380, "Passwords don't match", 0xE81123);
+        }
+        
+        bool next_btn = ui_button(0, cx + 60, cy + 140, 120, 44, "Create", !can_continue);
+        bool back_btn = ui_button(0, cx - 180, cy + 140, 120, 44, "Back", false);
+        
+        if ((g_mb & 1) && next_btn && can_continue) { setup_step = 3; g_mb = 0; }
+        if ((g_mb & 1) && back_btn) { setup_step = 1; g_mb = 0; }
+    }
+    else if (setup_step == 3) {
+        /* Completing setup */
+        logo_draw(cx - 48, 180, 96, g_accent);
+        text_draw_c(&font_title, 0, g_w, 310, "Setting things up...", 0x000000);
+        text_draw_c(&font_ui, 0, g_w, 360, "This will only take a moment", 0x666666);
+        spinner(cx, 440, 24);
+    }
+}
+
+static void setup_event(const Event *e) {
+    if (e->type == EV_KEY) {
+        if (setup_step == 1) {
+            if (e->key == K_ENTER && setup_name.len > 0) setup_step = 2;
+            else ti_key(&setup_name, e->key, e->mod);
+        } else if (setup_step == 2) {
+            if (e->key == K_TAB) {
+                setup_pass.focus = !setup_pass.focus;
+                setup_pass2.focus = !setup_pass2.focus;
+            } else if (e->key == K_ENTER) {
+                bool match = strcmp(setup_pass.buf, setup_pass2.buf) == 0;
+                if ((setup_pass.len == 0 && setup_pass2.len == 0) || (match && setup_pass.len > 0)) {
+                    setup_step = 3;
+                }
+            } else {
+                if (setup_pass.focus) ti_key(&setup_pass, e->key, e->mod);
+                else ti_key(&setup_pass2, e->key, e->mod);
+            }
         }
     }
+}
+
+/* ------------------------------------------------------------ Modern Windows 11 Login */
+#define LG_PW_W 240
+#define LG_PW_H 34
+static int lg_av_cy(void) { return g_h / 2 - 50; }
+static int lg_name_y(void) { return lg_av_cy() + 46 + 14; }
+static int lg_pw_y(void) { return lg_name_y() + font_title.h + 18; }
+static int lg_user_x(int i) { return g_w / 2 + i * 100 - (user_count() - 1) * 50; }
+static int lg_user_y(void) { return g_h - 150; }
+static int lg_btn_x(int i) { return g_w / 2 - 118 + i * 124; }
+static int lg_btn_y(void) { return g_h - 64; }
+static int lg_shake(void) {                      /* wrong-password wobble */
+    if (!login_shake_t) return 0;
+    int dt = (int)(hal_ms() - login_shake_t); if (dt > 500) return 0;
+    int p = dt % 160, tri = p < 40 ? p : p < 120 ? 80 - p : p - 160;
+    return tri * 14 * (500 - dt) / (40 * 500);
+}
+static void render_login(void) {
+    memcpy(g_bb, wall_blur ? wall_blur : wall, (size_t)g_w * g_h * 4);
+    gfx_rect_a(0, 0, g_w, g_h, 0x000000, 45);
+    User *u = &g_users[sel_user];
+    int cx = g_w / 2; char b[48];
+    ksnprintf(b, sizeof b, "%s, %s %d", wd_names[weekday(rtc.year, rtc.month, rtc.day)], mon_names[(rtc.month - 1 + 12) % 12], rtc.day);
+    text_draw_c(&font_title, 0, g_w, 40, b, 0xFFFFFF);
+    fmt_time(b, sizeof b);
+    text_draw_c(&font_big, 0, g_w, 40 + font_title.h + 6, b, 0xFFFFFF);
+
+    avatar_draw(cx, lg_av_cy(), 46, u->color);
+    text_draw_c(&font_title, 0, g_w, lg_name_y(), u->name, 0xFFFFFF);
+
+    int px = cx - LG_PW_W / 2 + lg_shake(), py = lg_pw_y();
+    if (u->pass[0]) {
+        pw.focus = true;
+        rrect_a(px, py, LG_PW_W, LG_PW_H, LG_PW_H / 2, 0xFFFFFF, 55);
+        if (pw.len == 0) text_draw_vc(&font_ui, px + 18, py, LG_PW_H, "Enter Password", 0xE4ECF5);
+        int n = MIN(pw.len, 14);
+        for (int k = 0; k < n; k++) gfx_circle(px + 20 + k * 12, py + LG_PW_H / 2, 3, 0xFFFFFF);
+        if (pw.len == 0 && ui_blink()) gfx_vline(px + 16, py + 9, LG_PW_H - 18, 0xFFFFFF);
+        if (pw.len > 0) {
+            int bx = px + LG_PW_W - 18, by = py + LG_PW_H / 2;
+            gfx_circle(bx, by, 11, in_rect(g_mx, g_my, px + LG_PW_W - 30, py, 30, LG_PW_H) ? 0xFFFFFF : 0xDCE6F2);
+            gfx_line(bx - 5, by, bx + 5, by, 0x2C3E58);
+            gfx_line(bx + 1, by - 4, bx + 5, by, 0x2C3E58); gfx_line(bx + 1, by + 4, bx + 5, by, 0x2C3E58);
+        }
+    } else {
+        bool hov = in_rect(g_mx, g_my, px, py, LG_PW_W, LG_PW_H);
+        rrect_a(px, py, LG_PW_W, LG_PW_H, LG_PW_H / 2, 0xFFFFFF, hov ? 85 : 55);
+        text_draw_c(&font_ui, px, LG_PW_W, py + (LG_PW_H - font_ui.h) / 2, "Click to sign in", 0xFFFFFF);
+    }
+    if (login_err[0]) text_draw_c(&font_small, 0, g_w, py + LG_PW_H + 14, login_err, 0xFFC4C4);
+
+    if (user_count() > 1) for (int i = 0; i < user_count(); i++) {
+        int idx = user_nth(i), x = lg_user_x(i), y = lg_user_y();
+        avatar_draw(x, y, 20, g_users[idx].color);
+        if (idx == sel_user) gfx_ring(x, y, 25, 2, 0xFFFFFF);
+        text_draw_c(&font_small, x - 50, 100, y + 30, g_users[idx].name, 0xFFFFFF);
+    }
+    for (int i = 0; i < 2; i++) {
+        int bx = lg_btn_x(i), by = lg_btn_y();
+        rrect_a(bx, by, 112, 32, 16, 0xFFFFFF, in_rect(g_mx, g_my, bx, by, 112, 32) ? 80 : 38);
+        text_draw_c(&font_ui, bx, 112, by + (32 - font_ui.h) / 2, i ? "Shut Down" : "Restart", 0xFFFFFF);
+    }
+    int el = (int)(hal_ms() - state_t);
+    if (el < 600) { gfx_rect_a(0, 0, g_w, g_h, 0x000000, 255 - el * 255 / 600); anim_busy = true; }
 }
 static void login_attempt(void) {
     User *u = &g_users[sel_user];
     if (!strcmp(u->pass, pw.buf)) {
-        g_user = sel_user; state = S_WELCOME; t0 = hal_ms(); ti_clear(&pw); login_err[0] = 0;
-    } else { kstrcpy(login_err, "The password is incorrect. Try again.", sizeof login_err); ti_clear(&pw); }
+        g_user = sel_user; state = S_WELCOME; t0 = hal_ms(); ti_clear(&pw); login_err[0] = 0; login_shake_t = 0;
+    } else {
+        kstrcpy(login_err, "Incorrect password. Try again.", sizeof login_err); ti_clear(&pw);
+        login_shake_t = hal_ms() | 1;
+    }
 }
 static void login_event(const Event *e) {
-    int cx = lg_cx(), fy = lg_field_y();
+    int cx = g_w / 2;
     if (e->type == EV_KEY) {
         if (e->key == K_ENTER) login_attempt();
-        else if (e->key == K_ESC) power_popup = false;
         else if (ti_key(&pw, e->key, e->mod)) login_err[0] = 0;
         return;
     }
     if (e->type != EV_DOWN || e->btn != 1) return;
-    int px = g_w - 64 - 130, py = g_h - 64 - 76;
-    if (power_popup && in_rect(e->x, e->y, px, py, 170, 72)) { os_shutdown((e->y - py) >= 36); return; }
-    power_popup = in_rect(e->x, e->y, g_w - 64, g_h - 64, 40, 40) ? !power_popup : false;
-    if (g_users[sel_user].pass[0] ? in_rect(e->x, e->y, cx + 130, fy, 36, 36) : in_rect(e->x, e->y, cx - 60, fy, 120, 36)) { login_attempt(); return; }
-    for (int n = 0, i = 0; n < MAX_USERS; n++) {
-        if (!g_users[n].used) continue;
-        if (in_rect(e->x, e->y, 16, lg_row_y(i++), 250, 52)) { sel_user = n; ti_clear(&pw); login_err[0] = 0; }
-    }
+    for (int i = 0; i < 2; i++) if (in_rect(e->x, e->y, lg_btn_x(i), lg_btn_y(), 112, 32)) { os_shutdown(i == 1); return; }
+    if (user_count() > 1) for (int i = 0; i < user_count(); i++)
+        if (in_rect(e->x, e->y, lg_user_x(i) - 40, lg_user_y() - 26, 80, 72)) {
+            sel_user = user_nth(i); ti_clear(&pw); login_err[0] = 0; return;
+        }
+    int px = cx - LG_PW_W / 2, py = lg_pw_y();
+    if (g_users[sel_user].pass[0]) { if (pw.len > 0 && in_rect(e->x, e->y, px + LG_PW_W - 30, py, 30, LG_PW_H)) login_attempt(); }
+    else if (in_rect(e->x, e->y, px, py, LG_PW_W, LG_PW_H)) login_attempt();
 }
 
 /* ------------------------------------------------------------ desktop icons + context menu */
@@ -301,13 +523,13 @@ static void ctx_run(int act) {
 #define SM_APPS_W 258
 static bool start_open; static char sm_query[32]; static int sm_qlen, sm_popup;   /* 0 none, 1 user, 2 power */
 static int sm_h(void) { return MIN(560, g_h - TASKBAR_H - 4); }
-static int sm_y(void) { return g_h - TASKBAR_H - sm_h(); }
-static void start_reset(void) { start_open = false; sm_query[0] = 0; sm_qlen = 0; sm_popup = 0; }
+static int sm_y(void) { return g_h - TASKBAR_H - sm_h() + sm_off; }
+static void start_reset(void) { start_open = false; sm_scroll = 0; sm_query[0] = 0; sm_qlen = 0; sm_popup = 0; }
 static void desktop_reset(void) { dsel = -1; ctx.open = false; dclick_i = -1; }
 
 typedef struct { int app, y, h; char hdr; } SMEnt;       /* app = -1 for a header row */
 static int sm_build(SMEnt *e) {
-    int idx[APP_COUNT], m = 0, n = 0, y = sm_y() + 8;
+    int idx[APP_COUNT], m = 0, n = 0, y = sm_y() + 8 - sm_scroll;
     for (int a = 0; a < APP_COUNT; a++) if (!sm_qlen || kcontains_ci(g_apps[a].name, sm_query)) idx[m++] = a;
     for (int i = 1; i < m; i++) { int v = idx[i], j = i - 1; while (j >= 0 && kstricmp(g_apps[idx[j]].name, g_apps[v].name) > 0) { idx[j + 1] = idx[j]; j--; } idx[j + 1] = v; }
     char last = 0;
@@ -340,6 +562,7 @@ static void start_draw(void) {
         else icon_draw(k == 1 ? ICON_GEAR : ricon[k], 12, y + 12, 24);
     }
     SMEnt e[APP_COUNT * 2 + 2]; int n = sm_build(e);
+    Clip list_clip = gfx_clip_push(SM_RAIL, sy + 4, SM_APPS_W, sh - 8);
     if (!n) text_draw(&font_ui, SM_RAIL + 16, sy + 20, "No results found.", 0xBBBBBB);
     for (int i = 0; i < n; i++) {
         if (e[i].app < 0) {
@@ -351,6 +574,7 @@ static void start_draw(void) {
             text_draw_vc(&font_ui, SM_RAIL + 50, e[i].y, 40, g_apps[e[i].app].name, 0xFFFFFF);
         }
     }
+    gfx_clip_pop(list_clip);
     text_draw(&font_ui_b, 316, sy + 16, "Productivity", 0xE6E6E6);
     text_draw(&font_ui_b, 316, sy + 270, "Explore", 0xE6E6E6);
     for (int i = 0; i < ARRLEN(tiles); i++) {
@@ -418,8 +642,8 @@ static bool start_click(int mx, int my) {
 static void start_key(const Event *e) {
     if (e->key == K_ESC) { if (sm_popup) sm_popup = 0; else start_reset(); }
     else if (e->key == K_ENTER) { SMEnt en[APP_COUNT * 2 + 2]; int n = sm_build(en); for (int i = 0; i < n; i++) if (en[i].app >= 0 && sm_qlen) { start_launch(en[i].app, -1); return; } }
-    else if (e->key == K_BACKSPACE) { if (sm_qlen) sm_query[--sm_qlen] = 0; }
-    else if (e->key >= 32 && e->key < 127 && !(e->mod & MOD_CTRL) && sm_qlen < 28) { sm_query[sm_qlen++] = (char)e->key; sm_query[sm_qlen] = 0; }
+    else if (e->key == K_BACKSPACE) { if (sm_qlen) sm_query[--sm_qlen] = 0; sm_scroll = 0; }
+    else if (e->key >= 32 && e->key < 127 && !(e->mod & MOD_CTRL) && sm_qlen < 28) { sm_query[sm_qlen++] = (char)e->key; sm_query[sm_qlen] = 0; sm_scroll = 0; }
 }
 
 /* ------------------------------------------------------------ taskbar */
@@ -430,7 +654,12 @@ static int tb_slots(int *apps) {
     for (int a = 0; a < APP_COUNT; a++) if (!g_apps[a].pinned && wm_count_app(a)) apps[n++] = a;
     return n;
 }
-static int tb_apps_x(void) { return 48 + tb_search_w() + 8; }
+static int tb_apps_x(void) {
+    if (g_shell_style == 2) return 48 + tb_search_w() + 8;
+    int apps[APP_COUNT], n = tb_slots(apps);
+    int group = n * 48;
+    return MAX(48 + tb_search_w() + 8, (g_w - group) / 2);
+}
 static void tb_app_click(int app) {
     int n = wm_count_app(app);
     if (!n) { app_launch(app, -1); return; }
@@ -441,12 +670,21 @@ static void tb_app_click(int app) {
     else wm_focus(last);
 }
 static void tb_magnifier(int x, int y) { gfx_ring(x + 9, y + 9, 6, 2, 0x333333); gfx_line(x + 13, y + 13, x + 19, y + 19, 0x333333); gfx_line(x + 14, y + 13, x + 20, y + 19, 0x333333); }
+static int tb_hv[APP_COUNT + 2], tb_iw[APP_COUNT + 2];
 static void taskbar_draw(void) {
-    int ty = g_h - TASKBAR_H;
-    gfx_rect_a(0, ty, g_w, TASKBAR_H, 0x0C0C0C, 232);
+    int ty = g_h - TASKBAR_H + tb_off;
+    if (g_shell_style == 0) {
+        gfx_rect_a(g_w / 2 - 220, ty + 3, 440, TASKBAR_H - 6, 0xF5F5F5, 225);
+        gfx_frame(g_w / 2 - 220, ty + 3, 440, TASKBAR_H - 6, 0xD0D0D0);
+    } else if (g_shell_style == 1) {
+        gfx_rect_a(0, ty, g_w, TASKBAR_H, 0x17191E, 238);
+    } else {
+        gfx_rect_a(0, ty, g_w, TASKBAR_H, 0x0C0C0C, 232);
+    }
     bool sh = in_rect(g_mx, g_my, 0, ty, 48, TASKBAR_H);
-    if (start_open) gfx_rect(0, ty, 48, TASKBAR_H, 0x333333); else if (sh) gfx_rect(0, ty, 48, TASKBAR_H, 0x2E2E2E);
-    logo_draw(14, ty + 10, 20, sh && !start_open ? g_accent : 0xFFFFFF);
+    int sv = tb_hv[APP_COUNT] = approach(tb_hv[APP_COUNT], sh ? 255 : 0, 110);
+    if (start_open) gfx_rect(0, ty, 48, TASKBAR_H, 0x333333); else if (sv) gfx_rect_a(0, ty, 48, TASKBAR_H, 0xFFFFFF, sv * 22 / 255);
+    logo_draw(14, ty + 10, 20, g_shell_style == 0 ? g_accent : (sh && !start_open ? g_accent : 0xFFFFFF));
     int sx = 48, sw = tb_search_w();
     gfx_rect(sx, ty + 4, sw, 32, start_open ? 0xFFFFFF : 0xE6E6E6);
     tb_magnifier(sx + 8, ty + 11);
@@ -457,16 +695,19 @@ static void taskbar_draw(void) {
     for (int i = 0; i < n; i++) {
         int x = tb_apps_x() + i * 48, cnt = wm_count_app(apps[i]);
         bool act = top && top->app == apps[i], hov = in_rect(g_mx, g_my, x, ty, 48, TASKBAR_H) && !start_open && !ctx.open;
-        if (act) gfx_rect_a(x, ty, 48, TASKBAR_H, 0xFFFFFF, 40); else if (hov) gfx_rect_a(x, ty, 48, TASKBAR_H, 0xFFFFFF, 25);
-        icon_draw(g_apps[apps[i]].icon, x + 12, ty + 8, 24);
-        if (cnt) gfx_rect(x + (act ? 2 : 12), ty + TASKBAR_H - 3, act ? 44 : 24, 2, act ? 0x8CCBFF : 0x76B9ED);
+        int hv = tb_hv[i] = approach(tb_hv[i], hov ? 255 : 0, 110);
+        int al = (act ? 40 : 0) + hv * 25 / 255;
+        if (al) gfx_rect_a(x, ty, 48, TASKBAR_H, 0xFFFFFF, al);
+        icon_draw(g_apps[apps[i]].icon, x + 12, ty + 8 - hv * 2 / 255, 24);
+        int iw = tb_iw[i] = approach(tb_iw[i], cnt ? (act ? 44 : 24) : 0, 100);
+        if (iw > 0) gfx_rect(x + (48 - iw) / 2, ty + TASKBAR_H - 3, iw, 2, act ? 0x8CCBFF : 0x76B9ED);
     }
     char tm[16], dt[16]; fmt_time(tm, sizeof tm); fmt_date(dt, sizeof dt);
     int cw = MAX(text_width(&font_small, tm), text_width(&font_small, dt)) + 22, cx = g_w - 6 - cw;
     if (in_rect(g_mx, g_my, cx, ty, cw, TASKBAR_H)) gfx_rect_a(cx, ty, cw, TASKBAR_H, 0xFFFFFF, 25);
     text_draw_c(&font_small, cx, cw, ty + 5, tm, 0xFFFFFF);
     text_draw_c(&font_small, cx, cw, ty + 21, dt, 0xFFFFFF);
-    int ix = cx - 100;                                   /* tray glyphs: chevron, network, speaker */
+    int ix = cx - 100;
     gfx_line(ix + 6, ty + 18, ix + 10, ty + 14, 0xFFFFFF); gfx_line(ix + 10, ty + 14, ix + 14, ty + 18, 0xFFFFFF);
     for (int b = 0; b < 4; b++) gfx_rect(ix + 36 + b * 4, ty + 24 - b * 3, 2, 3 + b * 3, 0xFFFFFF);
     gfx_rect(ix + 72, ty + 16, 4, 7, 0xFFFFFF); gfx_line(ix + 76, ty + 16, ix + 80, ty + 12, 0xFFFFFF); gfx_line(ix + 76, ty + 22, ix + 80, ty + 26, 0xFFFFFF); gfx_vline(ix + 80, ty + 12, 15, 0xFFFFFF);
@@ -485,13 +726,23 @@ static void taskbar_click(int mx, int my) {
 
 /* ------------------------------------------------------------ desktop state */
 static void render_desktop(void) {
+    u32 now = hal_ms(); anim_busy = false;
+    anim_dt = (last_anim && now - last_anim < 100) ? (int)(now - last_anim) : 16; last_anim = now;
+    int tgt = start_open ? 1000 : 0;
+    if (sm_prog < tgt) sm_prog = MIN(tgt, sm_prog + anim_dt * 1000 / 200);
+    else if (sm_prog > tgt) sm_prog = MAX(tgt, sm_prog - anim_dt * 1000 / 150);
+    if (sm_prog != tgt) anim_busy = true;
+    sm_off = (1000 - sm_prog * (2000 - sm_prog) / 1000) * sm_h() / 1000;
+    int el = (int)(now - state_t);
+    if (el < 450) { int p = el * 1000 / 450; tb_off = TASKBAR_H * (1000 - p * (2000 - p) / 1000) / 1000; anim_busy = true; } else tb_off = 0;
     memcpy(g_bb, wall, (size_t)g_w * g_h * 4);
     desk_draw();
     wm_update_hover(start_open || ctx.open || g_my >= g_h - TASKBAR_H);
     wm_draw_all();
     taskbar_draw();
-    if (start_open) start_draw();
+    if (start_open || sm_prog > 0) { Clip c = gfx_clip_push(0, 0, g_w, g_h - TASKBAR_H); start_draw(); gfx_clip_pop(c); }
     if (ctx.open) ctx_draw();
+    if (el < 500) { gfx_rect_a(0, 0, g_w, g_h, 0x000000, 255 - el * 255 / 500); anim_busy = true; }
 }
 static void desktop_event(const Event *e) {
     int mx = e->x, my = e->y;
@@ -503,7 +754,15 @@ static void desktop_event(const Event *e) {
         return;
     }
     if (e->type == EV_MOVE || e->type == EV_UP) { wm_mouse_event(e); return; }
-    if (e->type == EV_WHEEL) { if (!start_open) wm_mouse_event(e); return; }
+    if (e->type == EV_WHEEL) {
+        if (start_open && in_rect(mx, my, SM_RAIL, sm_y(), SM_APPS_W, sm_h())) {
+            SMEnt ent[APP_COUNT * 2 + 2]; int n = sm_build(ent);
+            int content = n ? ent[n - 1].y + ent[n - 1].h - (sm_y() + 8 - sm_scroll) : 0;
+            int max_scroll = MAX(0, content - (sm_h() - 16));
+            sm_scroll = CLAMP(sm_scroll - e->key * 44, 0, max_scroll);
+        } else if (!start_open) wm_mouse_event(e);
+        return;
+    }
     if (e->type != EV_DOWN) return;
     if (ctx.open) {
         bool inside = in_rect(mx, my, ctx.x, ctx.y, 230, ctx.n * 30 + 8);
@@ -542,31 +801,98 @@ void os_event(const Event *e) {
     if (e->type == EV_MOVE || e->type == EV_DOWN || e->type == EV_UP) { g_mx = e->x; g_my = e->y; }
     if (e->type == EV_DOWN) g_mb |= e->btn;
     if (e->type == EV_UP) g_mb &= ~e->btn;
-    if (state == S_LOGIN) login_event(e);
+    if (state == S_SETUP) setup_event(e);
+    else if (state == S_LOGIN) login_event(e);
     else if (state == S_DESKTOP) desktop_event(e);
 }
 void os_render(void) {
-    gfx_clip_reset(); rtc_refresh();
+    gfx_clip_reset(); rtc_refresh(); anim_busy = false;
+    if (state != prev_state) { prev_state = state; state_t = hal_ms(); }
     switch (state) {
     case S_BOOT: render_boot(); break;
+    case S_SETUP: render_setup(); break;
     case S_LOGIN: render_login(); break;
     case S_WELCOME: render_welcome(); break;
     case S_DESKTOP: render_desktop(); break;
     case S_SHUTDOWN: render_shutdown(); break;
     default: render_halted(); break;
     }
-    if (state == S_LOGIN || state == S_DESKTOP) cursor_draw();
+    if (state == S_SETUP || state == S_LOGIN || state == S_DESKTOP) cursor_draw();
 }
 bool os_tick(void) {
     u32 ms = hal_ms(); bool d = false;
+    static u32 last_save = 0;
+    
     switch (state) {
-    case S_BOOT: if (ms - t0 > 2600) { state = S_LOGIN; d = true; } break;
+    case S_BOOT: 
+        if (ms - t0 > 2600) { 
+            if (user_count() == 0) state = S_SETUP;
+            else state = S_LOGIN;
+            d = true; 
+        } 
+        break;
+    case S_SETUP:
+        if (setup_step == 3) {
+            /* Complete setup after short delay */
+            if (ms - t0 > 1500 || t0 == 0) {
+                /* Create the user */
+                int idx = user_add(setup_name.buf, setup_pass.buf, setup_is_admin);
+                if (idx >= 0) {
+                    /* Save new user to disk */
+                    users_save();
+                    fs_save();
+                    
+                    g_user = idx;
+                    state = S_WELCOME;
+                    t0 = hal_ms();
+                    d = true;
+                }
+            } else if (t0 == 0) {
+                t0 = ms; /* Start completion timer */
+            }
+        }
+        break;
     case S_WELCOME: if (ms - t0 > 1500) { state = S_DESKTOP; desktop_reset(); d = true; } break;
-    case S_SHUTDOWN: if (ms - t0 > 1800) { if (restart_req) hal_reboot(); else hal_poweroff(); state = S_HALTED; d = true; } break;
+    case S_SHUTDOWN: 
+        if (ms - t0 > 1800) { 
+            /* Save everything before shutdown */
+            users_save();
+            fs_save();
+            
+            if (restart_req) hal_reboot(); 
+            else hal_poweroff(); 
+            state = S_HALTED; 
+            d = true; 
+        } 
+        break;
     default: break;
     }
-    u32 ph = (state == S_BOOT || state == S_WELCOME || state == S_SHUTDOWN) ? ms / 60 : ms / 500;
+    
+    /* Deferred saves (flushed ~1.5 s after the last change) + a full save every 30 s on the desktop.
+       Both are instant no-ops when there is no ATA disk, and neither ever runs inside an input event. */
+    persist_flush(false);
+    if (state == S_DESKTOP && ms - last_save > 30000) {
+        persist_clear();
+        users_save();
+        fs_save();
+        last_save = ms;
+    }
+    
+    if (anim_busy || (state == S_LOGIN && login_shake_t && ms - login_shake_t < 520)) d = true;
+    u32 ph = (state == S_BOOT || state == S_WELCOME || state == S_SHUTDOWN || state == S_SETUP) ? ms / 60 : ms / 500;
     if (ph != last_ph) { last_ph = ph; d = true; }
+    
+    /* Update game windows */
+    if (state == S_DESKTOP) {
+        for (int i = 0; i < wm_zcount(); i++) {
+            Window *w = wm_zget(i);
+            if (!w->minimized && w->animating) {
+                d = true;
+                /* Game-specific updates */
+            }
+        }
+    }
+    
     return d;
 }
 Window *app_launch(int app, int arg) {

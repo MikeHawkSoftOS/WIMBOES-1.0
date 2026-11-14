@@ -100,6 +100,11 @@ void icon_draw(int k, int x, int y, int s) {
     case ICON_NEWFOLDER: R(2, 7, 24, 18, 0xE2A619); R(2, 5, 10, 4, 0xE2A619); R(2, 10, 24, 15, 0xFFCB3D); R(21, 15, 3, 12, 0x2E9E4F); R(17, 19, 11, 3, 0x2E9E4F); break;
     case ICON_TRASH: R(8, 8, 16, 3, 0x555555); R(13, 6, 6, 2, 0x555555); R(10, 11, 12, 16, 0x555555); R(13, 14, 1, 10, 0xFFFFFF); R(16, 14, 1, 10, 0xFFFFFF); R(19, 14, 1, 10, 0xFFFFFF); break;
     case ICON_CALENDAR: R(5, 5, 22, 23, 0xFFFFFF); R(5, 5, 22, 7, 0xE53935); R(9, 15, 4, 3, 0x777777); R(14, 15, 4, 3, 0x777777); R(19, 15, 4, 3, 0x777777); R(9, 20, 4, 3, 0x777777); R(14, 20, 4, 3, 0x777777); break;
+    case ICON_GAME: gfx_ring(x + h, y + h, 13 * s / 32, 2 * s / 32, 0x34C759);
+        gfx_rect(x + 6 * s / 32, y + 10 * s / 32, 4 * s / 32, 6 * s / 32, 0x34C759);
+        gfx_rect(x + 22 * s / 32, y + 10 * s / 32, 4 * s / 32, 6 * s / 32, 0x34C759);
+        gfx_circle(x + 20 * s / 32, y + 12 * s / 32, 2 * s / 32, 0xFF3B30);
+        gfx_circle(x + 12 * s / 32, y + 12 * s / 32, 2 * s / 32, 0x007AFF); break;
     }
 #undef R
 #undef L
