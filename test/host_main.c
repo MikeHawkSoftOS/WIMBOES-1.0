@@ -10,6 +10,8 @@ u32 hal_ms(void) { return fake_ms; }
 void hal_present(const u32 *b) { (void)b; }
 void hal_rtc(RtcTime *t) { *t = (RtcTime){ 2026, 11, 14, 15, 45, 30, 6 }; }
 void hal_idle(void) {}
+bool hal_disk_read(u32 s, void *b, int c) { (void)s; (void)b; (void)c; return false; }
+bool hal_disk_write(u32 s, const void *b, int c) { (void)s; (void)b; (void)c; return false; }
 void hal_poweroff(void) { off = true; }
 void hal_reboot(void) { off = true; }
 
@@ -36,11 +38,11 @@ int main(void) {
     mem_init(malloc(64 << 20), 64 << 20);
     os_init();
     adv(1000); shot("00_boot");
-    adv(2000); shot("01_login");
-    click(W / 2, H / 2 + 62 + 18);                 /* Sign in as Admin (no password) */
+    adv(2000); os_render(); adv(800); shot("01_login");
+    key(K_ENTER, 0);                 /* Sign in as Admin (no password) */
     adv(500); shot("02_welcome");
-    adv(1500); shot("03_desktop");
-    click(24, H - 20); shot("04_start");
+    adv(1500); os_render(); adv(800); shot("03_desktop");
+    click(24, H - 20); os_render(); adv(300); shot("04_start");
     type("note"); shot("05_start_search");
     key(K_ENTER, 0); adv(100);
     type("Hello from Wimboes!\nThis is Notepad running inside a toy OS.\n"); key('s', MOD_CTRL); adv(600); shot("06_notepad");
