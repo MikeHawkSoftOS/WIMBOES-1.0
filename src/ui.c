@@ -105,6 +105,149 @@ void icon_draw(int k, int x, int y, int s) {
         gfx_rect(x + 22 * s / 32, y + 10 * s / 32, 4 * s / 32, 6 * s / 32, 0x34C759);
         gfx_circle(x + 20 * s / 32, y + 12 * s / 32, 2 * s / 32, 0xFF3B30);
         gfx_circle(x + 12 * s / 32, y + 12 * s / 32, 2 * s / 32, 0x007AFF); break;
+
+    /* System */
+    case ICON_DISPLAY: R(4, 4, 24, 18, 0xC9CED6); R(6, 6, 20, 14, 0x0C0C0C);
+        R(13, 24, 6, 2, 0x8E96A3); R(10, 26, 12, 2, 0xC9CED6);
+        R(14, 28, 4, 2, 0x6A727C); R(14, 10, 4, 4, 0xE53935); break; /* monitor with ruler mark */
+    case ICON_SOUND: R(8, 14, 8, 4, 0xFFFFFF); R(16, 10, 6, 12, 0xFFFFFF);
+        gfx_line(x + 22 * s / 32, y + 7 * s / 32, x + 26 * s / 32, y + 4 * s / 32, 0xFFFFFF);
+        gfx_line(x + 23 * s / 32, y + 9 * s / 32, x + 28 * s / 32, y + 4 * s / 32, 0xFFFFFF);
+        gfx_line(x + 24 * s / 32, y + 11 * s / 32, x + 30 * s / 32, y + 6 * s / 32, 0xFFFFFF);
+        gfx_line(x + 25 * s / 32, y + 13 * s / 32, x + 32 * s / 32, y + 10 * s / 32, 0xFFFFFF);
+        gfx_line(x + 24 * s / 32, y + 19 * s / 32, x + 30 * s / 32, y + 26 * s / 32, 0xFFFFFF);
+        gfx_line(x + 23 * s / 32, y + 21 * s / 32, x + 28 * s / 32, y + 28 * s / 32, 0xFFFFFF);
+        gfx_line(x + 22 * s / 32, y + 25 * s / 32, x + 26 * s / 32, y + 30 * s / 32, 0xFFFFFF); break; /* speaker with waves */
+    case ICON_NOTIFICATIONS: R(14, 5, 4, 14, 0xFFFFFF); R(12, 19, 8, 4, 0xFFFFFF);
+        R(11, 23, 10, 2, 0xFFFFFF); gfx_circle(x + 16 * s / 32, y + 27 * s / 32, 2 * s / 32 + 1, 0xFFFFFF); break; /* bell */
+    case ICON_POWER_BATTERY: R(10, 6, 16, 20, 0xFFFFFF); R(15, 4, 6, 3, 0xFFFFFF);
+        R(12, 8, 12, 14, 0x4CAF50); R(12, 8, 4, 14, 0x81C784); break; /* battery with lightning (green fill) */
+    case ICON_STORAGE: R(6, 8, 20, 6, 0xC9CED6); R(6, 16, 20, 6, 0xC9CED6); R(6, 24, 20, 6, 0xC9CED6);
+        R(5, 7, 22, 2, 0x8E96A3); R(5, 15, 22, 2, 0x8E96A3); R(5, 23, 22, 2, 0x8E96A3); break; /* stack of disks */
+    case ICON_ABOUT: gfx_ring(x + h, y + h, 12 * s / 32, MAX(1, s / 12), 0x0078D7);
+        R(15, 8, 2, 10, 0x0078D7); R(15, 22, 2, 2, 0x0078D7); break; /* info circle */
+    case ICON_THEMES: gfx_circle(x + 9 * s / 32, y + 9 * s / 32, 5 * s / 32 + 1, 0xE53935);
+        gfx_circle(x + 23 * s / 32, y + 9 * s / 32, 5 * s / 32 + 1, 0x43A047);
+        gfx_circle(x + 9 * s / 32, y + 23 * s / 32, 5 * s / 32 + 1, 0x1E88E5);
+        gfx_circle(x + 23 * s / 32, y + 23 * s / 32, 5 * s / 32 + 1, 0xFDD835);
+        gfx_circle(x + h, y + h, 4 * s / 32 + 1, 0xFFFFFF); break; /* paint palette */
+    case ICON_LOCK_SCREEN: R(10, 6, 12, 10, 0xFFFFFF); R(10, 6, 12, 1, 0x0078D7);
+        R(10, 16, 12, 10, 0x0078D7); gfx_circle(x + 16 * s / 32, y + 20 * s / 32, 2 * s / 32 + 1, 0xFFFFFF); break; /* lock on screen */
+    case ICON_START: logo_draw(x, y, s, 0xFFFFFF); break; /* Windows logo / 4 squares */
+    case ICON_TASKBAR_SETTINGS: R(3, 20, 26, 8, 0xC9CED6); R(3, 20, 26, 1, 0x8E96A3);
+        R(13, 8, 6, 12, 0x9AA0A6); R(11, 10, 10, 1, 0x9AA0A6); R(11, 16, 10, 1, 0x9AA0A6);
+        R(11, 12, 3, 4, 0x9AA0A6); R(18, 12, 3, 4, 0x9AA0A6); break; /* taskbar with gear */
+    case ICON_APPS: for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++)
+        R(6 + i * 8, 6 + j * 8, 6, 6, (i + j) % 2 == 0 ? 0x0078D7 : 0xFFFFFF); break; /* grid of squares */
+    case ICON_DEFAULT_APPS: R(8, 12, 8, 8, 0xFFFFFF); R(16, 12, 8, 8, 0xFFFFFF);
+        gfx_line(x + 16 * s / 32, y + 12 * s / 32, x + 24 * s / 32, y + 4 * s / 32, 0xFFFFFF);
+        gfx_line(x + 16 * s / 32, y + 20 * s / 32, x + 24 * s / 32, y + 28 * s / 32, 0xFFFFFF); break; /* link/chain */
+    case ICON_STARTUP: R(14, 8, 4, 16, 0xFFFFFF); gfx_line(x + 16 * s / 32, y + 24 * s / 32, x + 10 * s / 32, y + 16 * s / 32, 0xFFFFFF);
+        gfx_line(x + 16 * s / 32, y + 24 * s / 32, x + 22 * s / 32, y + 16 * s / 32, 0xFFFFFF); break; /* rocket/play triangle */
+    case ICON_OFFLINE_MAPS: R(14, 8, 4, 12, 0xE53935); gfx_circle(x + 16 * s / 32, y + 22 * s / 32, 4 * s / 32 + 1, 0xE53935);
+        R(15, 12, 2, 4, 0xFFFFFF); break; /* map pin */
+
+    /* Accounts */
+    case ICON_YOUR_INFO: R(6, 4, 20, 24, 0xFFFFFF); R(6, 4, 20, 8, 0x0078D7);
+        gfx_circle(x + h, y + 12 * s / 32, 4 * s / 32 + 1, 0xFFFFFF);
+        R(8, 20, 16, 8, 0xE8EBF0); break; /* user card */
+    case ICON_SIGNIN_OPTIONS: R(10, 8, 12, 16, 0xFFFFFF); R(13, 10, 6, 8, 0xE8EBF0);
+        R(14, 12, 4, 4, 0x0078D7); R(14, 18, 4, 2, 0x0078D7); break; /* key/fingerprint card */
+    case ICON_FAMILY: gfx_circle(x + 9 * s / 32, y + 10 * s / 32, 4 * s / 32 + 1, 0xFFFFFF);
+        gfx_circle(x + 23 * s / 32, y + 10 * s / 32, 4 * s / 32 + 1, 0xFFFFFF);
+        gfx_circle(x + h, y + 24 * s / 32, 5 * s / 32 + 1, 0xFFFFFF);
+        gfx_circle(x + 9 * s / 32, y + 20 * s / 32, 3 * s / 32 + 1, 0x81D4FA);
+        gfx_circle(x + 23 * s / 32, y + 20 * s / 32, 3 * s / 32 + 1, 0xF8BBD0); break; /* group of users */
+
+    /* Backup */
+    case ICON_BACKUP: R(8, 12, 16, 12, 0xFFFFFF); R(8, 12, 16, 6, 0x81D4FA);
+        gfx_circle(x + h, y + 10 * s / 32, 5 * s / 32 + 1, 0x81D4FA);
+        R(14, 6, 4, 8, 0xFFFFFF); L(12, 10, 16, 6, 0xFFFFFF); L(16, 10, 20, 6, 0xFFFFFF); break; /* cloud with arrow */
+
+    /* Time & Language */
+    case ICON_DATE_TIME: R(6, 4, 20, 20, 0xFFFFFF); R(6, 4, 20, 6, 0xE53935);
+        R(9, 12, 4, 8, 0xE53935); R(19, 12, 4, 8, 0x0078D7);
+        gfx_circle(x + h, y + 16 * s / 32, 8 * s / 32, 0xE8EBF0);
+        L(16, 16, 16, 10, 0xE53935); L(16, 16, 22, 16, 0x0078D7); break; /* calendar + clock */
+    case ICON_LANGUAGE: gfx_ring(x + h, y + h, 12 * s / 32, MAX(1, s / 10), 0x0078D7);
+        R(14, 10, 4, 12, 0x0078D7); L(10, 22, 22, 10, 0x0078D7); break; /* globe */
+    case ICON_TYPING: R(4, 16, 24, 12, 0xC9CED6); R(6, 18, 20, 8, 0xFFFFFF);
+        for (int i = 0; i < 10; i++) R(6 + i * 2, 18, 1, 8, i % 2 == 0 ? 0x0078D7 : 0xFFFFFF); break; /* keyboard */
+    case ICON_SPEECH: R(10, 8, 12, 14, 0x0078D7); R(14, 22, 4, 4, 0x0078D7);
+        L(16, 22, 20, 26, 0x0078D7); L(16, 22, 20, 18, 0x0078D7); break; /* microphone */
+
+    /* Gaming */
+    case ICON_GAMING: gfx_ring(x + h, y + h, 14 * s / 32, 2 * s / 32, 0x512DA8);
+        gfx_rect(x + 10 * s / 32, y + 12 * s / 32, 4 * s / 32, 6 * s / 32, 0x512DA8);
+        gfx_rect(x + 18 * s / 32, y + 12 * s / 32, 4 * s / 32, 6 * s / 32, 0x512DA8);
+        gfx_circle(x + 13 * s / 32, y + 22 * s / 32, 2 * s / 32 + 1, 0x512DA8);
+        gfx_circle(x + 19 * s / 32, y + 22 * s / 32, 2 * s / 32 + 1, 0x512DA8);
+        gfx_circle(x + 16 * s / 32, y + 16 * s / 32, 2 * s / 32 + 1, 0xFFFFFF); break; /* controller */
+    case ICON_CAPTURES: R(8, 10, 16, 14, 0x333333); R(10, 12, 12, 10, 0x000000);
+        gfx_circle(x + h, y + 17 * s / 32, 4 * s / 32 + 1, 0xFF3B30);
+        R(13, 15, 6, 4, 0xFFFFFF); break; /* camera */
+    case ICON_GAME_BAR: gfx_ring(x + 10 * s / 32, y + 16 * s / 32, 6 * s / 32, MAX(1, s / 16), 0x512DA8);
+        gfx_ring(x + 22 * s / 32, y + 16 * s / 32, 6 * s / 32, MAX(1, s / 16), 0x512DA8);
+        R(10, 16, 12, 6, 0x512DA8); R(14, 8, 4, 8, 0x512DA8); R(20, 8, 4, 8, 0x512DA8); break; /* gamepad + bar */
+
+    /* Accessibility */
+    case ICON_ACCESSIBILITY: gfx_circle(x + h, y + 8 * s / 32, 4 * s / 32 + 1, 0x0078D7);
+        R(14, 14, 4, 12, 0x0078D7);
+        L(10, 22, 16, 14, 0x0078D7); L(18, 14, 22, 22, 0x0078D7); break; /* human figure with arms */
+    case ICON_VISION: gfx_ring(x + h, y + h, 12 * s / 32, MAX(1, s / 12), 0x0078D7);
+        gfx_circle(x + h, y + h, 5 * s / 32 + 1, 0x0078D7);
+        gfx_circle(x + h, y + h, 2 * s / 32 + 1, 0xFFFFFF); break; /* eye */
+    case ICON_HEARING: R(14, 6, 4, 20, 0x0078D7);
+        gfx_line(x + 10 * s / 32, y + 26 * s / 32, x + 18 * s / 32, y + 26 * s / 32, 0x0078D7);
+        gfx_line(x + 8 * s / 32, y + 8 * s / 32, x + 14 * s / 32, y + 6 * s / 32, 0x0078D7);
+        gfx_line(x + 6 * s / 32, y + 12 * s / 32, x + 12 * s / 32, y + 10 * s / 32, 0x0078D7);
+        gfx_line(x + 22 * s / 32, y + 8 * s / 32, x + 24 * s / 32, y + 6 * s / 32, 0x0078D7);
+        gfx_line(x + 20 * s / 32, y + 12 * s / 32, x + 26 * s / 32, y + 10 * s / 32, 0x0078D7); break; /* ear with waves */
+    case ICON_INTERACTION: R(10, 10, 12, 20, 0xFFFFFF); R(10, 10, 12, 4, 0x0078D7);
+        gfx_circle(x + 10 * s / 32, y + 14 * s / 32, 3 * s / 32 + 1, 0x0078D7);
+        gfx_circle(x + 22 * s / 32, y + 14 * s / 32, 3 * s / 32 + 1, 0x0078D7);
+        gfx_circle(x + 16 * s / 32, y + 26 * s / 32, 3 * s / 32 + 1, 0x0078D7); break; /* hand/touch */
+
+    /* Privacy & Security */
+    case ICON_PRIVACY: R(8, 6, 16, 18, 0x0078D7); R(10, 8, 12, 14, 0xFFFFFF);
+        gfx_circle(x + h, y + 14 * s / 32, 5 * s / 32 + 1, 0x0078D7);
+        R(15, 12, 2, 8, 0xFFFFFF); R(15, 22, 2, 2, 0xFFFFFF); break; /* shield with lock */
+    case ICON_APP_PERMISSIONS: R(8, 6, 16, 18, 0x0078D7); R(10, 8, 12, 14, 0xFFFFFF);
+        R(12, 10, 8, 8, 0xE8EBF0); R(13, 11, 2, 2, 0x0078D7); R(17, 11, 2, 2, 0x0078D7);
+        R(13, 15, 2, 2, 0x0078D7); R(17, 15, 2, 2, 0x0078D7); break; /* shield with apps grid */
+    case ICON_WINDOWS_SECURITY: R(8, 6, 16, 18, 0x4CAF50); R(10, 8, 12, 14, 0xFFFFFF);
+        L(12, 16, 15, 20, 0x4CAF50); L(15, 20, 20, 12, 0x4CAF50); break; /* shield with check */
+    case ICON_FIND_DEVICE: gfx_ring(x + h, y + h, 12 * s / 32, MAX(1, s / 12), 0x0078D7);
+        L(16, 4, 16, 28, 0x0078D7); L(4, 16, 28, 16, 0x0078D7);
+        gfx_circle(x + h, y + h, 4 * s / 32 + 1, 0x0078D7); break; /* radar/location */
+    case ICON_BITLOCKER: R(10, 6, 12, 10, 0x0078D7); R(10, 6, 12, 1, 0xFFFFFF);
+        R(10, 16, 12, 10, 0x0078D7); gfx_circle(x + 16 * s / 32, y + 20 * s / 32, 2 * s / 32 + 1, 0xFFFFFF); break; /* lock */
+    case ICON_WINDOWS_UPDATE: gfx_ring(x + h, y + h, 12 * s / 32, MAX(1, s / 12), 0x0078D7);
+        gfx_line(x + 16 * s / 32, y + 4 * s / 32, x + 20 * s / 32, y + 8 * s / 32, 0x0078D7);
+        gfx_line(x + 16 * s / 32, y + 4 * s / 32, x + 20 * s / 32, y + 4 * s / 32, 0x0078D7);
+        gfx_line(x + 16 * s / 32, y + 28 * s / 32, x + 12 * s / 32, y + 24 * s / 32, 0x0078D7);
+        gfx_line(x + 16 * s / 32, y + 28 * s / 32, x + 12 * s / 32, y + 28 * s / 32, 0x0078D7); break; /* circular arrows */
+    case ICON_UPDATE_HISTORY: gfx_ring(x + h, y + h, 12 * s / 32, MAX(1, s / 12), 0x0078D7);
+        R(15, 6, 2, 10, 0x0078D7); L(16, 16, 22, 12, 0x0078D7); R(21, 11, 3, 3, 0x0078D7); break; /* clock with arrow */
+    case ICON_ADVANCED_OPTIONS: R(12, 8, 8, 16, 0x9AA0A6); R(12, 8, 8, 1, 0xFFFFFF);
+        R(8, 12, 4, 4, 0x9AA0A6); R(20, 12, 4, 4, 0x9AA0A6);
+        R(8, 20, 4, 4, 0x9AA0A6); R(20, 20, 4, 4, 0x9AA0A6); break; /* gear + sliders */
+
+    /* Common UI */
+    case ICON_CHEVRON_RIGHT: L(10, 8, 18, 16, 0xFFFFFF); L(18, 16, 10, 24, 0xFFFFFF); break;
+    case ICON_CHEVRON_DOWN: L(8, 10, 16, 18, 0xFFFFFF); L(16, 18, 24, 10, 0xFFFFFF); break;
+    case ICON_MORE_VERT: gfx_circle(x + 16 * s / 32, y + 8 * s / 32, 2 * s / 32 + 1, 0xFFFFFF);
+        gfx_circle(x + 16 * s / 32, y + 16 * s / 32, 2 * s / 32 + 1, 0xFFFFFF);
+        gfx_circle(x + 16 * s / 32, y + 24 * s / 32, 2 * s / 32 + 1, 0xFFFFFF); break;
+    case ICON_REFRESH: gfx_ring(x + h, y + h, 12 * s / 32, MAX(1, s / 12), 0xFFFFFF);
+        gfx_line(x + 16 * s / 32, y + 4 * s / 32, x + 20 * s / 32, y + 8 * s / 32, 0xFFFFFF);
+        gfx_line(x + 16 * s / 32, y + 4 * s / 32, x + 20 * s / 32, y + 4 * s / 32, 0xFFFFFF); break;
+    case ICON_ADD: R(14, 6, 4, 20, 0xFFFFFF); R(6, 14, 20, 4, 0xFFFFFF); break; /* same as ICON_PLUS */
+    case ICON_REMOVE: R(6, 14, 20, 4, 0xFFFFFF); R(15, 18, 2, 2, 0xFFFFFF); R(15, 22, 2, 2, 0xFFFFFF); R(15, 26, 2, 2, 0xFFFFFF); break; /* trash/minus */
+    case ICON_EDIT: R(4, 14, 24, 4, 0xFFFFFF); L(4, 16, 12, 24, 0xFFFFFF); L(20, 16, 12, 24, 0xFFFFFF); break; /* pencil */
+    case ICON_SETTINGS_GEAR: gfx_ring(x + h, y + h, 9 * s / 32 + 1, 4 * s / 32 + 1, 0x9AA0A6);
+        R(14, 3, 4, 6, 0x9AA0A6); R(14, 23, 4, 6, 0x9AA0A6); R(3, 14, 6, 4, 0x9AA0A6); R(23, 14, 6, 4, 0x9AA0A6);
+        R(6, 6, 4, 4, 0x9AA0A6); R(22, 6, 4, 4, 0x9AA0A6); R(6, 22, 4, 4, 0x9AA0A6); R(22, 22, 4, 4, 0x9AA0A6); break; /* same as ICON_GEAR */
     }
 #undef R
 #undef L

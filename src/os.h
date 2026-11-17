@@ -83,6 +83,11 @@ void gfx_circle(int cx, int cy, int r, u32 c);            /* anti-aliased */
 void gfx_ring(int cx, int cy, int r, int thick, u32 c);
 void gfx_line(int x0, int y0, int x1, int y1, u32 c);
 void gfx_darken(int x, int y, int w, int h, u32 tint, int a);  /* acrylic-ish */
+void gfx_rrect(int x, int y, int w, int h, int r, u32 c);              /* filled rounded rect, AA corners */
+void gfx_rrect_a(int x, int y, int w, int h, int r, u32 c, int a);     /* alpha version */
+void gfx_rrect_frame(int x, int y, int w, int h, int r, u32 c);        /* rounded rect frame/border */
+void gfx_rrect_frame_a(int x, int y, int w, int h, int r, u32 c, int a); /* alpha frame */
+void gfx_shadow(int x, int y, int w, int h, int r, int spread, u32 color, int alpha); /* drop shadow */
 u32  col_blend(u32 dst, u32 src, int a);
 u32  col_lighten(u32 c, int a);                           /* toward white */
 u32  col_darken(u32 c, int a);                            /* toward black */
@@ -93,6 +98,141 @@ void text_draw_r(const Font *f, int right, int y, const char *s, u32 c);
 void text_draw_c(const Font *f, int x, int w, int y, const char *s, u32 c);
 void text_draw_vc(const Font *f, int x, int y, int h, const char *s, u32 c);
 void text_fit(const Font *f, const char *s, int maxw, char *out, int cap);  /* ellipsis */
+
+/* ---------------------------------------------------------------- themes & customization */
+#define THEME_NAME_MAX 32
+#define THEME_MAX 16
+typedef struct {
+    bool used;
+    char name[THEME_NAME_MAX];
+    u32 accent;
+    u32 bg_primary, bg_secondary, bg_tertiary;
+    u32 fg_primary, fg_secondary, fg_muted;
+    u32 border, border_focus;
+    u32 hover, active, selection;
+    u32 window_bg, titlebar_bg, titlebar_fg, titlebar_fg_inactive;
+    u32 taskbar_bg, startmenu_bg, startmenu_rail;
+    u32 shadow;
+    int wallpaper;
+    int shell_style;
+    int cursor_theme;
+    int ui_scale;        /* 100, 125, 150, 175, 200 */
+    bool animations;
+    bool transparency;
+    int rounding;        /* corner radius 0-16 */
+} Theme;
+extern Theme g_themes[THEME_MAX];
+extern int g_theme;       /* active theme index */
+extern bool g_reduced_motion;
+void theme_init(void);
+void theme_load(int idx);
+void theme_save_current(void);
+bool theme_parse_json(const char *json, Theme *t);
+void theme_to_json(const Theme *t, char *buf, int cap);
+
+/* ---------------------------------------------------------------- widgets / gadgets */
+#define WIDGET_MAX 32
+#define WIDGET_NAME_MAX 24
+enum { WIDGET_CLOCK, WIDGET_SYSMON, WIDGET_NOTES, WIDGET_CALENDAR, WIDGET_WEATHER, WIDGET_LAUNCHER, WIDGET_CUSTOM };
+typedef struct {
+    bool used;
+    int type;
+    char name[WIDGET_NAME_MAX];
+    int x, y, w, h;
+    int min_w, min_h, max_w, max_h;
+    bool pinned;          /* stay on top of desktop icons */
+    bool locked;          /* prevent moving */
+    void *data;           /* type-specific data */
+    void (*draw)(struct Widget *, int cx, int cy, int cw, int ch);
+    void (*mouse)(struct Widget *, int ev, int x, int y, int btn);
+    void (*key)(struct Widget *, int key, int mod);
+    void (*tick)(struct Widget *);
+    void (*close)(struct Widget *);
+} Widget;
+extern Widget g_widgets[WIDGET_MAX];
+Widget *widget_create(int type, int x, int y);
+void widget_close(Widget *w);
+void widget_draw_all(void);
+bool widget_mouse_event(const Event *e);
+void widget_key_event(int key, int mod);
+void widget_tick_all(void);
+void widgets_save(void);
+void widgets_load(void);
+
+/* ---------------------------------------------------------------- virtual desktops */
+#define DESKTOP_MAX 8
+typedef struct {
+    bool used;
+    char name[24];
+    int wallpaper;
+    int widget_ids[WIDGET_MAX];
+    int nwidgets;
+} Desktop;
+extern Desktop g_desktops[DESKTOP_MAX];
+extern int g_desktop;     /* active desktop index */
+void desktops_init(void);
+void desktop_switch(int idx);
+void desktop_new(void);
+void desktop_close(int idx);
+void desktop_move_win(Window *w, int target);
+int  desktop_of_win(Window *w);
+void desktops_save(void);
+void desktops_load(void);
+
+/* ---------------------------------------------------------------- window tiling / snap */
+enum { SNAP_NONE, SNAP_LEFT, SNAP_RIGHT, SNAP_TOP, SNAP_BOTTOM, SNAP_TOPLEFT, SNAP_TOPRIGHT, SNAP_BOTTOMLEFT, SNAP_BOTTOMRIGHT, SNAP_MAXIMIZE };
+typedef struct { int zone; u32 hint_start; } SnapState;
+extern SnapState g_snap;
+void snap_update(Window *w, int mx, int my);
+int  snap_zone_at(int mx, int my);
+void snap_apply(Window *w, int zone);
+void snap_draw_hints(void);
+
+/* ---------------------------------------------------------------- command palette / launcher */
+#define CMD_MAX 64
+typedef struct { const char *name; const char *desc; int icon; void (*action)(void *arg); void *arg; } CmdItem;
+extern CmdItem g_commands[CMD_MAX];
+extern int g_ncmds;
+extern bool g_palette_open;
+extern char g_palette_query[64];
+extern int g_palette_qlen;
+extern int g_palette_sel;
+void palette_init(void);
+void palette_toggle(void);
+void palette_draw(void);
+void palette_key(int key, int mod);
+void palette_mouse(int mx, int my, int btn, int ev);
+void palette_register(const char *name, const char *desc, int icon, void (*action)(void *arg), void *arg);
+
+/* ---------------------------------------------------------------- notifications / toasts */
+#define TOAST_MAX 16
+#define TOAST_TEXT_MAX 128
+typedef struct { bool used; u32 start; int duration; u32 color; char text[TOAST_TEXT_MAX]; int icon; int y_anim; } Toast;
+extern Toast g_toasts[TOAST_MAX];
+void toast_show(const char *text, int duration_ms, u32 color, int icon);
+void toast_draw(void);
+void toast_tick(void);
+
+/* ---------------------------------------------------------------- startup apps */
+#define STARTUP_MAX 16
+typedef struct { int app; int arg; bool enabled; } StartupEntry;
+extern StartupEntry g_startup[STARTUP_MAX];
+extern int g_nstartup;
+void startup_init(void);
+void startup_run_all(void);
+void startup_add(int app, int arg);
+void startup_remove(int idx);
+void startup_save(void);
+void startup_load(void);
+
+/* ---------------------------------------------------------------- cursor themes */
+#define CURSOR_MAX 8
+#define CURSOR_FRAMES 16
+typedef struct { bool used; char name[24]; const char *frames[CURSOR_FRAMES]; int nframes; int hot_x, hot_y; } CursorTheme;
+extern CursorTheme g_cursors[CURSOR_MAX];
+extern int g_cursor_theme;
+void cursors_init(void);
+void cursor_draw_themed(void);
 
 /* ---------------------------------------------------------------- ram filesystem */
 #define FS_MAX 160
@@ -142,7 +282,27 @@ extern u32 g_accent;
 extern bool g_clock24;
 enum { ICON_FOLDER, ICON_PC, ICON_BIN, ICON_NOTEPAD, ICON_CALC, ICON_PAINT, ICON_TERM, ICON_GEAR,
        ICON_TASKMGR, ICON_FILE, ICON_DRIVE, ICON_USER, ICON_POWER, ICON_LOGO, ICON_SEARCH,
-       ICON_DOCS, ICON_PLUS, ICON_BACK, ICON_UP, ICON_NEWFOLDER, ICON_TRASH, ICON_CALENDAR, ICON_GAME };
+       ICON_DOCS, ICON_PLUS, ICON_BACK, ICON_UP, ICON_NEWFOLDER, ICON_TRASH, ICON_CALENDAR, ICON_GAME,
+       /* System */
+       ICON_DISPLAY, ICON_SOUND, ICON_NOTIFICATIONS, ICON_POWER_BATTERY, ICON_STORAGE, ICON_ABOUT,
+       ICON_THEMES, ICON_LOCK_SCREEN, ICON_START, ICON_TASKBAR_SETTINGS, ICON_APPS, ICON_DEFAULT_APPS,
+       ICON_STARTUP, ICON_OFFLINE_MAPS,
+       /* Accounts */
+       ICON_YOUR_INFO, ICON_SIGNIN_OPTIONS, ICON_FAMILY,
+       /* Backup */
+       ICON_BACKUP,
+       /* Time & Language */
+       ICON_DATE_TIME, ICON_LANGUAGE, ICON_TYPING, ICON_SPEECH,
+       /* Gaming */
+       ICON_GAMING, ICON_CAPTURES, ICON_GAME_BAR,
+       /* Accessibility */
+       ICON_ACCESSIBILITY, ICON_VISION, ICON_HEARING, ICON_INTERACTION,
+       /* Privacy & Security */
+       ICON_PRIVACY, ICON_APP_PERMISSIONS, ICON_WINDOWS_SECURITY, ICON_FIND_DEVICE,
+       ICON_BITLOCKER, ICON_WINDOWS_UPDATE, ICON_UPDATE_HISTORY, ICON_ADVANCED_OPTIONS,
+       /* Common UI */
+       ICON_CHEVRON_RIGHT, ICON_CHEVRON_DOWN, ICON_MORE_VERT, ICON_REFRESH,
+       ICON_ADD, ICON_REMOVE, ICON_EDIT, ICON_SETTINGS_GEAR };
 void icon_draw(int kind, int x, int y, int size);
 void avatar_draw(int cx, int cy, int r, u32 color);
 void logo_draw(int x, int y, int size, u32 color);

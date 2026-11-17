@@ -79,6 +79,187 @@ void gfx_ring(int cx, int cy, int r, int thick, u32 c) {
 }
 void gfx_circle(int cx, int cy, int r, u32 c) { gfx_ring(cx, cy, r, 0, c); }
 
+/* ---- rounded rectangles ---- */
+void gfx_rrect(int x, int y, int w, int h, int r, u32 c) {
+    if (r <= 0) { gfx_rect(x, y, w, h, c); return; }
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+
+    int x0 = MAX(x, clip.x0), y0 = MAX(y, clip.y0);
+    int x1 = MIN(x + w, clip.x1), y1 = MIN(y + h, clip.y1);
+
+    int xr = x + r, xr2 = x + w - r;
+    int yr = y + r, yr2 = y + h - r;
+
+    for (int j = y0; j < y1; j++) {
+        u32 *p = &g_bb[j * g_w];
+        for (int i = x0; i < x1; i++) {
+            int a = 255;
+            if (j < yr) {
+                if (i < xr) {
+                    int dx = i - xr, dy = j - yr;
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    a = cov(r * 16, d) * 255 / 16;
+                } else if (i >= xr2) {
+                    int dx = i - (xr2 - 1), dy = j - yr;
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    a = cov(r * 16, d) * 255 / 16;
+                }
+            } else if (j >= yr2) {
+                if (i < xr) {
+                    int dx = i - xr, dy = j - (yr2 - 1);
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    a = cov(r * 16, d) * 255 / 16;
+                } else if (i >= xr2) {
+                    int dx = i - (xr2 - 1), dy = j - (yr2 - 1);
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    a = cov(r * 16, d) * 255 / 16;
+                }
+            }
+            if (a > 0) p[i] = col_blend(p[i], c, a);
+        }
+    }
+}
+
+void gfx_rrect_a(int x, int y, int w, int h, int r, u32 c, int a) {
+    if (a >= 255) { gfx_rrect(x, y, w, h, r, c); return; }
+    if (r <= 0) { gfx_rect_a(x, y, w, h, c, a); return; }
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+
+    int x0 = MAX(x, clip.x0), y0 = MAX(y, clip.y0);
+    int x1 = MIN(x + w, clip.x1), y1 = MIN(y + h, clip.y1);
+
+    int xr = x + r, xr2 = x + w - r;
+    int yr = y + r, yr2 = y + h - r;
+
+    for (int j = y0; j < y1; j++) {
+        u32 *p = &g_bb[j * g_w];
+        for (int i = x0; i < x1; i++) {
+            int ca = 255;
+            if (j < yr) {
+                if (i < xr) {
+                    int dx = i - xr, dy = j - yr;
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    ca = cov(r * 16, d) * 255 / 16;
+                } else if (i >= xr2) {
+                    int dx = i - (xr2 - 1), dy = j - yr;
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    ca = cov(r * 16, d) * 255 / 16;
+                }
+            } else if (j >= yr2) {
+                if (i < xr) {
+                    int dx = i - xr, dy = j - (yr2 - 1);
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    ca = cov(r * 16, d) * 255 / 16;
+                } else if (i >= xr2) {
+                    int dx = i - (xr2 - 1), dy = j - (yr2 - 1);
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    ca = cov(r * 16, d) * 255 / 16;
+                }
+            }
+            if (ca > 0) p[i] = col_blend(p[i], c, (ca * a) / 255);
+        }
+    }
+}
+
+void gfx_rrect_frame(int x, int y, int w, int h, int r, u32 c) {
+    gfx_rrect_frame_a(x, y, w, h, r, c, 255);
+}
+
+void gfx_rrect_frame_a(int x, int y, int w, int h, int r, u32 c, int a) {
+    if (a <= 0) return;
+    if (r <= 0) {
+        gfx_rect_a(x, y, w, 1, c, a);
+        gfx_rect_a(x, y + h - 1, w, 1, c, a);
+        gfx_rect_a(x, y, 1, h, c, a);
+        gfx_rect_a(x + w - 1, y, 1, h, c, a);
+        return;
+    }
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+
+    int thick = 1;
+    int x0 = MAX(x, clip.x0), y0 = MAX(y, clip.y0);
+    int x1 = MIN(x + w, clip.x1), y1 = MIN(y + h, clip.y1);
+
+    int xr = x + r, xr2 = x + w - r;
+    int yr = y + r, yr2 = y + h - r;
+
+    for (int j = y0; j < y1; j++) {
+        u32 *p = &g_bb[j * g_w];
+        for (int i = x0; i < x1; i++) {
+            int ca = 0;
+            if (j < yr) {
+                if (i < xr) {
+                    int dx = i - xr, dy = j - yr;
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    int outer = cov(r * 16, d);
+                    int inner = cov((r - thick) * 16, d);
+                    ca = (outer - inner) * 255 / 16;
+                } else if (i >= xr2) {
+                    int dx = i - (xr2 - 1), dy = j - yr;
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    int outer = cov(r * 16, d);
+                    int inner = cov((r - thick) * 16, d);
+                    ca = (outer - inner) * 255 / 16;
+                } else {
+                    int dy = j - yr;
+                    int d = (int)isqrt((u32)(dy * dy) * 256);
+                    int outer = cov(r * 16, d);
+                    int inner = cov((r - thick) * 16, d);
+                    ca = (outer - inner) * 255 / 16;
+                }
+            } else if (j >= yr2) {
+                if (i < xr) {
+                    int dx = i - xr, dy = j - (yr2 - 1);
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    int outer = cov(r * 16, d);
+                    int inner = cov((r - thick) * 16, d);
+                    ca = (outer - inner) * 255 / 16;
+                } else if (i >= xr2) {
+                    int dx = i - (xr2 - 1), dy = j - (yr2 - 1);
+                    int d = (int)isqrt((u32)(dx * dx + dy * dy) * 256);
+                    int outer = cov(r * 16, d);
+                    int inner = cov((r - thick) * 16, d);
+                    ca = (outer - inner) * 255 / 16;
+                } else {
+                    int dy = j - (yr2 - 1);
+                    int d = (int)isqrt((u32)(dy * dy) * 256);
+                    int outer = cov(r * 16, d);
+                    int inner = cov((r - thick) * 16, d);
+                    ca = (outer - inner) * 255 / 16;
+                }
+            } else {
+                if (i < xr) {
+                    int dx = i - xr;
+                    int d = (int)isqrt((u32)(dx * dx) * 256);
+                    int outer = cov(r * 16, d);
+                    int inner = cov((r - thick) * 16, d);
+                    ca = (outer - inner) * 255 / 16;
+                } else if (i >= xr2) {
+                    int dx = i - (xr2 - 1);
+                    int d = (int)isqrt((u32)(dx * dx) * 256);
+                    int outer = cov(r * 16, d);
+                    int inner = cov((r - thick) * 16, d);
+                    ca = (outer - inner) * 255 / 16;
+                }
+            }
+            if (ca > 0) p[i] = col_blend(p[i], c, (ca * a) / 255);
+        }
+    }
+}
+
+/* ---- shadows ---- */
+void gfx_shadow(int x, int y, int w, int h, int r, int spread, u32 color, int alpha) {
+    if (alpha <= 0 || spread <= 0) return;
+    for (int i = 0; i < spread; i++) {
+        int a = alpha * (spread - i) / spread;
+        int expand = i + 1;
+        gfx_rrect_a(x - expand, y - expand, w + expand * 2, h + expand * 2, r + expand, color, a);
+    }
+}
+
 /* ---- text ---- */
 static int gidx(char ch) { int i = (u8)ch - 32; return (i < 0 || i > 94) ? '?' - 32 : i; }
 int text_width(const Font *f, const char *s) {

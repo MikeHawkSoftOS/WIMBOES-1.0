@@ -96,16 +96,16 @@ static int region(Window *w, int mx, int my, int *edges) {
 }
 
 /* ---- drawing ---- */
-static void draw_controls(Window *w, bool active) {
+static void draw_controls(Window *w, bool active, u32 titlebar_bg, u32 titlebar_fg, u32 titlebar_fg_inactive) {
     int right = w->x + w->w - 1, y = w->y;
     static const struct { int off, kind; } b[3] = { { 138, R_MIN }, { 92, R_MAX }, { 46, R_CLOSE } };
     for (int i = 0; i < 3; i++) {
         int bx = right - b[i].off;
         bool hov = ui_hover(w, bx, y + 1, 46, TITLE_H - 1) && !(drag.mode);
-        u32 fg = active ? 0x000000 : 0x888888;
+        u32 fg = active ? titlebar_fg : titlebar_fg_inactive;
         if (hov) {
             if (b[i].kind == R_CLOSE) { gfx_rect(bx, y + 1, 46, TITLE_H - 1, 0xE81123); fg = 0xFFFFFF; }
-            else gfx_rect(bx, y + 1, 46, TITLE_H - 1, 0xE5E5E5);
+            else gfx_rect(bx, y + 1, 46, TITLE_H - 1, col_lighten(titlebar_bg, 30));
         }
         int cx = bx + 23, cy = y + 16;
         if (b[i].kind == R_MIN) gfx_hline(cx - 5, cy, 10, fg);
@@ -132,41 +132,76 @@ static void draw_window(Window *w, bool active) {
         w->anim_w = (float)w->w; w->anim_h = (float)w->h;
         w->anim_alpha = 1.0f;
     }
-    
+
     int x = (int)w->anim_x, y = (int)w->anim_y;
     int ww = (int)w->anim_w, hh = (int)w->anim_h;
     int alpha = (int)(w->anim_alpha * 255);
-    
+
     if (ww < 10 || hh < 10) return;
-    
-    if (!w->maximized && !w->animating) {
-        for (int d = 1; d <= 9; d++) {          /* cheap soft shadow: concentric rings */
+
+    /* Get theme colors and rounding */
+    Theme *t = (g_theme >= 0 && g_theme < THEME_MAX && g_themes[g_theme].used) ? &g_themes[g_theme] : 0;
+    int rounding = (!w->maximized && t) ? t->rounding : 0;
+    u32 window_bg = t ? t->window_bg : 0xFFFFFF;
+    u32 titlebar_bg = t ? t->titlebar_bg : 0xFFFFFF;
+    u32 titlebar_fg = t ? t->titlebar_fg : 0x000000;
+    u32 titlebar_fg_inactive = t ? t->titlebar_fg_inactive : 0x808080;
+    u32 border_color = active ? (t ? t->border_focus : g_accent) : (t ? t->border : 0xAAAAAA);
+    u32 shadow_color = t ? t->shadow : 0x000000;
+
+    /* Draw shadow (only when not animating and not maximized) */
+    if (!w->maximized && !w->animating && alpha >= 255) {
+        for (int d = 1; d <= 9; d++) {
             int a = active ? 34 - d * 3 : 20 - d * 2;
             if (a <= 0) break;
-            a = a * alpha / 255;
-            gfx_rect_a(x - d, y - d + 3, ww + 2 * d, 1, 0x000000, a);
-            gfx_rect_a(x - d, y + hh + d + 2, ww + 2 * d, 1, 0x000000, a);
-            gfx_rect_a(x - d, y - d + 4, 1, hh + 2 * d - 1, 0x000000, a);
-            gfx_rect_a(x + ww + d - 1, y - d + 4, 1, hh + 2 * d - 1, 0x000000, a);
+            gfx_rect_a(x - d, y - d + 3, ww + 2 * d, 1, shadow_color, a);
+            gfx_rect_a(x - d, y + hh + d + 2, ww + 2 * d, 1, shadow_color, a);
+            gfx_rect_a(x - d, y - d + 4, 1, hh + 2 * d - 1, shadow_color, a);
+            gfx_rect_a(x + ww + d - 1, y - d + 4, 1, hh + 2 * d - 1, shadow_color, a);
         }
     }
-    if (alpha < 255) gfx_rect_a(x, y, ww, hh, 0xFFFFFF, alpha);
-    else gfx_rect(x, y, ww, hh, 0xFFFFFF);
-    
-    if (hh > TITLE_H) {
-        icon_draw(w->icon, x + 9, y + 8, 16);
-        char t[64]; text_fit(&font_ui, w->title, ww - 32 - 138 - 8, t, sizeof t);
-        text_draw(&font_ui, x + 32, y + (TITLE_H - font_ui.h) / 2, t, active ? 0x000000 : 0x808080);
-        draw_controls(w, active);
+
+    /* Draw window background with rounded corners */
+    if (rounding > 0) {
+        if (alpha < 255) gfx_rrect_a(x, y, ww, hh, rounding, window_bg, alpha);
+        else gfx_rrect(x, y, ww, hh, rounding, window_bg);
+    } else {
+        if (alpha < 255) gfx_rect_a(x, y, ww, hh, window_bg, alpha);
+        else gfx_rect(x, y, ww, hh, window_bg);
     }
-    
+
+    /* Draw title bar */
+    if (hh > TITLE_H) {
+        if (rounding > 0) {
+            /* Title bar with rounded top corners only */
+            int tr = rounding;
+            if (alpha < 255) gfx_rrect_a(x, y, ww, TITLE_H, tr, titlebar_bg, alpha);
+            else gfx_rrect(x, y, ww, TITLE_H, tr, titlebar_bg);
+            /* Cover bottom corners of title bar to make them square */
+            gfx_rect(x, y + TITLE_H - tr, ww, tr, titlebar_bg);
+        } else {
+            gfx_rect(x, y, ww, TITLE_H, titlebar_bg);
+        }
+
+        icon_draw(w->icon, x + 9, y + 8, 16);
+        char title_buf[64]; text_fit(&font_ui, w->title, ww - 32 - 138 - 8, title_buf, sizeof title_buf);
+        text_draw(&font_ui, x + 32, y + (TITLE_H - font_ui.h) / 2, title_buf, active ? titlebar_fg : titlebar_fg_inactive);
+        draw_controls(w, active, titlebar_bg, titlebar_fg, titlebar_fg_inactive);
+    }
+
     int cx = x + 1, cy = y + TITLE_H, cw = ww - 2, ch = hh - TITLE_H - 1;
     if (ch > 0) {
         Clip o = gfx_clip_push(cx, cy, cw, ch);
         if (w->draw) w->draw(w, cx, cy, cw, ch);
         gfx_clip_pop(o);
     }
-    gfx_frame(x, y, ww, hh, active ? g_accent : 0xAAAAAA);
+
+    /* Draw border frame */
+    if (rounding > 0) {
+        gfx_rrect_frame(x, y, ww, hh, rounding, border_color);
+    } else {
+        gfx_frame(x, y, ww, hh, border_color);
+    }
 }
 void wm_draw_all(void) {
     Window *top = wm_top();

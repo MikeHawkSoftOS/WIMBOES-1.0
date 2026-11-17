@@ -211,13 +211,19 @@ static void desktop_reset(void);
 
 void os_init(void) {
     fs_init(); users_init();
-    
+
+    /* Initialize theme system */
+    theme_init();
+
     /* Try to load saved data from disk */
     bool loaded_users = users_load();
     bool loaded_fs = fs_load();
     if (loaded_users && loaded_fs) persist_clear();      /* memory now matches the disk: nothing to write back */
-    
-    wallpaper_make(0);
+
+    /* Load saved theme */
+    theme_load_saved();
+
+    wallpaper_make(g_wallpaper);
     
     /* Check if we need setup (no users or failed to load) */
     if (user_count() == 0 || !loaded_users) {
@@ -495,12 +501,45 @@ static void ctx_add(int act, const char *l) { ctx.act[ctx.n] = act; ctx.label[ct
 static void ctx_show(int x, int y) { ctx.open = true; ctx.x = MIN(x, g_w - 232); ctx.y = MIN(y, g_h - TASKBAR_H - ctx.n * 30 - 10); }
 static void ctx_draw(void) {
     int w = 230, h = ctx.n * 30 + 8;
-    gfx_rect_a(ctx.x - 1, ctx.y + 3, w + 3, h + 3, 0x000000, 40);
-    gfx_rect(ctx.x, ctx.y, w, h, 0xF2F2F2); gfx_frame(ctx.x, ctx.y, w, h, 0xA0A0A0);
+
+    /* Get theme colors */
+    Theme *t = (g_theme >= 0 && g_theme < THEME_MAX && g_themes[g_theme].used) ? &g_themes[g_theme] : 0;
+    u32 menu_bg = t ? t->bg_primary : 0xF2F2F2;
+    u32 menu_border = t ? t->border : 0xA0A0A0;
+    u32 hover_bg = t ? t->hover : 0xD6D6D6;
+    u32 fg_primary = t ? t->fg_primary : 0x000000;
+    u32 shadow = t ? t->shadow : 0x000000;
+    int rounding = t ? t->rounding : 8;  /* Context menus always have at least 8px rounding */
+
+    /* Shadow */
+    gfx_shadow(ctx.x, ctx.y, w, h, rounding, 8, shadow, 60);
+
+    /* Background with rounded corners */
+    gfx_rrect(ctx.x, ctx.y, w, h, rounding, menu_bg);
+    gfx_rrect_frame(ctx.x, ctx.y, w, h, rounding, menu_border);
+
     for (int i = 0; i < ctx.n; i++) {
         int y = ctx.y + 4 + i * 30;
-        if (in_rect(g_mx, g_my, ctx.x + 2, y, w - 4, 30)) gfx_rect(ctx.x + 2, y, w - 4, 30, 0xD6D6D6);
-        text_draw_vc(&font_ui, ctx.x + 32, y, 30, ctx.label[i], 0x000000);
+        bool hov = in_rect(g_mx, g_my, ctx.x + 2, y, w - 4, 30);
+        if (hov) {
+            int item_rounding = 6;
+            if (i == 0 && i == ctx.n - 1) item_rounding = rounding;
+            else if (i == 0) item_rounding = rounding;
+            else if (i == ctx.n - 1) item_rounding = rounding;
+            gfx_rrect(ctx.x + 2, y, w - 4, 30, item_rounding, hover_bg);
+        }
+        /* Icon based on action */
+        int icon = ICON_FILE;
+        if (ctx.act[i] == CA_REFRESH) icon = ICON_REFRESH;
+        else if (ctx.act[i] == CA_NEWFOLDER) icon = ICON_NEWFOLDER;
+        else if (ctx.act[i] == CA_NEWTEXT) icon = ICON_NOTEPAD;
+        else if (ctx.act[i] == CA_PERSONALIZE) icon = ICON_THEMES;
+        else if (ctx.act[i] == CA_OPEN) icon = ICON_FOLDER;
+        else if (ctx.act[i] == CA_DELETE) icon = ICON_TRASH;
+        else if (ctx.act[i] == CA_TERMINAL) icon = ICON_TERM;
+        else if (ctx.act[i] == CA_EMPTYBIN) icon = ICON_BIN;
+        icon_draw(icon, ctx.x + 8, y + 7, 16);
+        text_draw_vc(&font_ui, ctx.x + 32, y, 30, ctx.label[i], fg_primary);
     }
 }
 static void ctx_run(int act) {
@@ -551,49 +590,94 @@ static int rail_y(int k) { return sm_y() + sm_h() - 48 * (k + 1); }      /* 0 po
 
 static void start_draw(void) {
     int sy = sm_y(), sh = sm_h();
-    gfx_rect_a(0, sy, SM_W, sh, 0x1B1B1B, 240);
-    gfx_rect_a(0, sy, SM_RAIL, sh, 0x000000, 70);
-    for (int i = 0; i < 3; i++) gfx_rect(15, sy + 17 + i * 6, 18, 2, 0xFFFFFF);
+
+    /* Get theme colors */
+    Theme *t = (g_theme >= 0 && g_theme < THEME_MAX && g_themes[g_theme].used) ? &g_themes[g_theme] : 0;
+    u32 startmenu_bg = t ? t->startmenu_bg : 0x1B1B1B;
+    u32 startmenu_rail = t ? t->startmenu_rail : 0x000000;
+    u32 accent = g_accent;
+    u32 fg_primary = t ? t->fg_primary : 0xFFFFFF;
+    u32 fg_secondary = t ? t->fg_secondary : 0xCCCCCC;
+    u32 fg_muted = t ? t->fg_muted : 0x888888;
+    u32 hover_bg = t ? t->hover : 0x3C3C3C;
+    u32 border = t ? t->border : 0x4A4A4A;
+    u32 shadow = t ? t->shadow : 0x000000;
+    int rounding = t ? t->rounding : 0;
+    bool transparency = t ? t->transparency : false;
+    int menu_alpha = transparency ? 240 : 255;
+
+    /* Draw start menu background with shadow and rounded corners */
+    if (rounding > 0) {
+        /* Shadow */
+        gfx_shadow(0, sy, SM_W, sh, rounding, 12, shadow, 80);
+        /* Background */
+        gfx_rrect_a(0, sy, SM_W, sh, rounding, startmenu_bg, menu_alpha);
+        gfx_rrect_frame_a(0, sy, SM_W, sh, rounding, border, menu_alpha);
+        /* Rail background */
+        gfx_rrect_a(0, sy, SM_RAIL, sh, rounding, startmenu_rail, menu_alpha);
+    } else {
+        gfx_rect_a(0, sy, SM_W, sh, startmenu_bg, menu_alpha);
+        gfx_rect_a(0, sy, SM_RAIL, sh, startmenu_rail, menu_alpha);
+    }
+
+    /* Hamburger menu lines */
+    for (int i = 0; i < 3; i++) gfx_rect(15, sy + 17 + i * 6, 18, 2, fg_muted);
+
     static const int ricon[4] = { ICON_POWER, ICON_GEAR, ICON_DOCS, ICON_USER };
     for (int k = 0; k < 4; k++) {
         int y = rail_y(k);
-        if (in_rect(g_mx, g_my, 0, y, SM_RAIL, 48) && !sm_popup) gfx_rect_a(0, y, SM_RAIL, 48, 0xFFFFFF, 30);
+        if (in_rect(g_mx, g_my, 0, y, SM_RAIL, 48) && !sm_popup) {
+            if (rounding > 0) gfx_rrect_a(0, y, SM_RAIL, 48, 8, 0xFFFFFF, 30);
+            else gfx_rect_a(0, y, SM_RAIL, 48, 0xFFFFFF, 30);
+        }
         if (k == 3) avatar_draw(24, y + 24, 12, g_user >= 0 ? g_users[g_user].color : 0x777777);
         else icon_draw(k == 1 ? ICON_GEAR : ricon[k], 12, y + 12, 24);
     }
+
     SMEnt e[APP_COUNT * 2 + 2]; int n = sm_build(e);
     Clip list_clip = gfx_clip_push(SM_RAIL, sy + 4, SM_APPS_W, sh - 8);
-    if (!n) text_draw(&font_ui, SM_RAIL + 16, sy + 20, "No results found.", 0xBBBBBB);
+    if (!n) text_draw(&font_ui, SM_RAIL + 16, sy + 20, "No results found.", fg_muted);
     for (int i = 0; i < n; i++) {
         if (e[i].app < 0) {
             char hd[16]; if (e[i].hdr == '*') kstrcpy(hd, "Best match", sizeof hd); else { hd[0] = e[i].hdr; hd[1] = 0; }
-            text_draw_vc(&font_ui_b, SM_RAIL + 14, e[i].y, 28, hd, 0xFFFFFF);
+            text_draw_vc(&font_ui_b, SM_RAIL + 14, e[i].y, 28, hd, fg_secondary);
         } else {
-            if (in_rect(g_mx, g_my, SM_RAIL, e[i].y, SM_APPS_W, 40) && !sm_popup) gfx_rect(SM_RAIL, e[i].y, SM_APPS_W, 40, 0x3C3C3C);
+            if (in_rect(g_mx, g_my, SM_RAIL, e[i].y, SM_APPS_W, 40) && !sm_popup) {
+                if (rounding > 0) gfx_rrect_a(SM_RAIL, e[i].y, SM_APPS_W, 40, 8, hover_bg, 255);
+                else gfx_rect(SM_RAIL, e[i].y, SM_APPS_W, 40, hover_bg);
+            }
             icon_draw(g_apps[e[i].app].icon, SM_RAIL + 14, e[i].y + 8, 24);
-            text_draw_vc(&font_ui, SM_RAIL + 50, e[i].y, 40, g_apps[e[i].app].name, 0xFFFFFF);
+            text_draw_vc(&font_ui, SM_RAIL + 50, e[i].y, 40, g_apps[e[i].app].name, fg_primary);
         }
     }
     gfx_clip_pop(list_clip);
-    text_draw(&font_ui_b, 316, sy + 16, "Productivity", 0xE6E6E6);
-    text_draw(&font_ui_b, 316, sy + 270, "Explore", 0xE6E6E6);
+
+    text_draw(&font_ui_b, 316, sy + 16, "Productivity", fg_secondary);
+    text_draw(&font_ui_b, 316, sy + 270, "Explore", fg_secondary);
+
     for (int i = 0; i < ARRLEN(tiles); i++) {
         int x, y, w; tile_rect(i, &x, &y, &w);
         bool hov = in_rect(g_mx, g_my, x, y, w, 100) && !sm_popup;
-        gfx_rect(x, y, w, 100, g_accent);
+        u32 tile_bg = tiles[i].app < 0 ? accent : (hov ? col_lighten(accent, 20) : accent);
+        if (rounding > 0) {
+            gfx_rrect(x, y, w, 100, 12, tile_bg);
+            if (hov) gfx_rrect_frame(x, y, w, 100, 12, 0xDDDDDD);
+        } else {
+            gfx_rect(x, y, w, 100, tile_bg);
+            if (hov) gfx_frame(x, y, w, 100, 0xDDDDDD);
+        }
         if (tiles[i].app < 0) {
             int wd = weekday(rtc.year, rtc.month, rtc.day);
             char b[24]; ksnprintf(b, sizeof b, "%d", rtc.day);
-            text_draw(&font_ui_b, x + 10, y + 10, wd_names[wd], 0xFFFFFF);
-            text_draw(&font_big, x + 10, y + 28, b, 0xFFFFFF);
+            text_draw(&font_ui_b, x + 10, y + 10, wd_names[wd], fg_primary);
+            text_draw(&font_big, x + 10, y + 28, b, fg_primary);
             ksnprintf(b, sizeof b, "%s %d", mon_names[(rtc.month - 1 + 12) % 12], rtc.year);
-            text_draw(&font_small, x + 10, y + 78, b, 0xFFFFFF);
+            text_draw(&font_small, x + 10, y + 78, b, fg_primary);
             icon_draw(ICON_CALENDAR, x + w - 50, y + 20, 36);
         } else {
             icon_draw(g_apps[tiles[i].app].icon, x + (w - 40) / 2, y + 16, 40);
-            { char tn[32]; text_fit(&font_small, g_apps[tiles[i].app].name, w - 12, tn, sizeof tn); text_draw(&font_small, x + 8, y + 100 - 22, tn, 0xFFFFFF); }
+            { char tn[32]; text_fit(&font_small, g_apps[tiles[i].app].name, w - 12, tn, sizeof tn); text_draw(&font_small, x + 8, y + 100 - 22, tn, fg_primary); }
         }
-        if (hov) gfx_frame(x, y, w, 100, 0xDDDDDD);
     }
     if (sm_popup) {
         static const char *const up[2] = { "Change account settings", "Sign out" }, *const pp[2] = { "Shut down", "Restart" };
@@ -673,45 +757,116 @@ static void tb_magnifier(int x, int y) { gfx_ring(x + 9, y + 9, 6, 2, 0x333333);
 static int tb_hv[APP_COUNT + 2], tb_iw[APP_COUNT + 2];
 static void taskbar_draw(void) {
     int ty = g_h - TASKBAR_H + tb_off;
+
+    /* Get theme colors */
+    Theme *t = (g_theme >= 0 && g_theme < THEME_MAX && g_themes[g_theme].used) ? &g_themes[g_theme] : 0;
+    u32 taskbar_bg = t ? t->taskbar_bg : (g_shell_style == 0 ? 0xF5F5F5 : (g_shell_style == 1 ? 0x17191E : 0x0C0C0C));
+    u32 startmenu_bg = t ? t->startmenu_bg : 0x1B1B1B;
+    u32 startmenu_rail = t ? t->startmenu_rail : 0x000000;
+    u32 accent = g_accent;
+    u32 fg_primary = t ? t->fg_primary : 0xFFFFFF;
+    u32 fg_muted = t ? t->fg_muted : 0x888888;
+    u32 border = t ? t->border : 0x4A4A4A;
+    int rounding = t ? t->rounding : 0;
+    bool transparency = t ? t->transparency : false;
+
+    int taskbar_alpha = transparency ? 230 : 255;
+
     if (g_shell_style == 0) {
-        gfx_rect_a(g_w / 2 - 220, ty + 3, 440, TASKBAR_H - 6, 0xF5F5F5, 225);
-        gfx_frame(g_w / 2 - 220, ty + 3, 440, TASKBAR_H - 6, 0xD0D0D0);
+        /* macOS style - centered pill */
+        int pill_w = 48 + tb_search_w() + 8 + 48 * tb_slots((int[APP_COUNT]){0}) + 100;
+        int pill_x = (g_w - pill_w) / 2;
+        if (rounding > 0) {
+            gfx_rrect_a(pill_x, ty + 3, pill_w, TASKBAR_H - 6, rounding, taskbar_bg, taskbar_alpha);
+            gfx_rrect_frame_a(pill_x, ty + 3, pill_w, TASKBAR_H - 6, rounding, border, taskbar_alpha);
+        } else {
+            gfx_rect_a(pill_x, ty + 3, pill_w, TASKBAR_H - 6, taskbar_bg, taskbar_alpha);
+            gfx_frame(pill_x, ty + 3, pill_w, TASKBAR_H - 6, border);
+        }
     } else if (g_shell_style == 1) {
-        gfx_rect_a(0, ty, g_w, TASKBAR_H, 0x17191E, 238);
+        /* Windows 11 style - centered with rounded corners */
+        if (rounding > 0) {
+            /* Floating taskbar with rounded corners */
+            int tb_margin = 8;
+            int tb_w = g_w - tb_margin * 2;
+            int tb_h = TASKBAR_H - 4;
+            int tb_x = tb_margin;
+            int tb_y = ty + 2;
+            gfx_shadow(tb_x, tb_y, tb_w, tb_h, rounding, 8, 0x000000, 60);
+            gfx_rrect_a(tb_x, tb_y, tb_w, tb_h, rounding, taskbar_bg, taskbar_alpha);
+            gfx_rrect_frame_a(tb_x, tb_y, tb_w, tb_h, rounding, border, taskbar_alpha);
+        } else {
+            gfx_rect_a(0, ty, g_w, TASKBAR_H, taskbar_bg, taskbar_alpha);
+        }
     } else {
-        gfx_rect_a(0, ty, g_w, TASKBAR_H, 0x0C0C0C, 232);
+        /* Windows 10 style - full width */
+        gfx_rect_a(0, ty, g_w, TASKBAR_H, taskbar_bg, taskbar_alpha);
     }
+
     bool sh = in_rect(g_mx, g_my, 0, ty, 48, TASKBAR_H);
     int sv = tb_hv[APP_COUNT] = approach(tb_hv[APP_COUNT], sh ? 255 : 0, 110);
-    if (start_open) gfx_rect(0, ty, 48, TASKBAR_H, 0x333333); else if (sv) gfx_rect_a(0, ty, 48, TASKBAR_H, 0xFFFFFF, sv * 22 / 255);
-    logo_draw(14, ty + 10, 20, g_shell_style == 0 ? g_accent : (sh && !start_open ? g_accent : 0xFFFFFF));
-    int sx = 48, sw = tb_search_w();
-    gfx_rect(sx, ty + 4, sw, 32, start_open ? 0xFFFFFF : 0xE6E6E6);
+
+    /* Start button */
+    int start_x = (g_shell_style == 1) ? (g_w / 2 - 24) : 0;
+    int start_w = 48;
+    if (rounding > 0 && g_shell_style == 1) {
+        if (start_open) {
+            gfx_rrect(start_x, ty, start_w, TASKBAR_H, rounding, col_lighten(accent, 60));
+        } else if (sv) {
+            gfx_rrect_a(start_x, ty, start_w, TASKBAR_H, rounding, 0xFFFFFF, sv * 22 / 255);
+        }
+    } else {
+        if (start_open) gfx_rect(start_x, ty, start_w, TASKBAR_H, 0x333333); else if (sv) gfx_rect_a(start_x, ty, start_w, TASKBAR_H, 0xFFFFFF, sv * 22 / 255);
+    }
+    logo_draw(start_x + 14, ty + 10, 20, g_shell_style == 0 ? accent : (sh && !start_open ? accent : fg_primary));
+
+    /* Search box */
+    int sx = start_x + start_w, sw = tb_search_w();
+    int search_bg = start_open ? 0xFFFFFF : (transparency ? 0xFFFFFF : 0xE6E6E6);
+    int search_alpha = start_open ? 255 : (transparency ? 180 : 255);
+    if (rounding > 0) {
+        gfx_rrect_a(sx, ty + 4, sw, 32, 16, search_bg, search_alpha);
+    } else {
+        gfx_rect(sx, ty + 4, sw, 32, search_bg);
+    }
     tb_magnifier(sx + 8, ty + 11);
     if (start_open && sm_qlen) text_draw_vc(&font_ui, sx + 36, ty + 4, 32, sm_query, 0x000000);
-    else text_draw_vc(&font_ui, sx + 36, ty + 4, 32, "Type here to search", 0x4A4A4A);
+    else text_draw_vc(&font_ui, sx + 36, ty + 4, 32, "Type here to search", fg_muted);
     if (start_open && ui_blink()) gfx_rect(sx + 36 + (sm_qlen ? text_width(&font_ui, sm_query) : 0), ty + 11, 1, 18, 0x000000);
+
+    /* App buttons */
     int apps[APP_COUNT], n = tb_slots(apps); Window *top = wm_top();
     for (int i = 0; i < n; i++) {
         int x = tb_apps_x() + i * 48, cnt = wm_count_app(apps[i]);
         bool act = top && top->app == apps[i], hov = in_rect(g_mx, g_my, x, ty, 48, TASKBAR_H) && !start_open && !ctx.open;
         int hv = tb_hv[i] = approach(tb_hv[i], hov ? 255 : 0, 110);
         int al = (act ? 40 : 0) + hv * 25 / 255;
-        if (al) gfx_rect_a(x, ty, 48, TASKBAR_H, 0xFFFFFF, al);
+        if (al) {
+            if (rounding > 0) gfx_rrect_a(x, ty, 48, TASKBAR_H, 8, 0xFFFFFF, al);
+            else gfx_rect_a(x, ty, 48, TASKBAR_H, 0xFFFFFF, al);
+        }
         icon_draw(g_apps[apps[i]].icon, x + 12, ty + 8 - hv * 2 / 255, 24);
         int iw = tb_iw[i] = approach(tb_iw[i], cnt ? (act ? 44 : 24) : 0, 100);
         if (iw > 0) gfx_rect(x + (48 - iw) / 2, ty + TASKBAR_H - 3, iw, 2, act ? 0x8CCBFF : 0x76B9ED);
     }
+
+    /* Clock/date */
     char tm[16], dt[16]; fmt_time(tm, sizeof tm); fmt_date(dt, sizeof dt);
     int cw = MAX(text_width(&font_small, tm), text_width(&font_small, dt)) + 22, cx = g_w - 6 - cw;
-    if (in_rect(g_mx, g_my, cx, ty, cw, TASKBAR_H)) gfx_rect_a(cx, ty, cw, TASKBAR_H, 0xFFFFFF, 25);
-    text_draw_c(&font_small, cx, cw, ty + 5, tm, 0xFFFFFF);
-    text_draw_c(&font_small, cx, cw, ty + 21, dt, 0xFFFFFF);
+    if (in_rect(g_mx, g_my, cx, ty, cw, TASKBAR_H)) {
+        if (rounding > 0) gfx_rrect_a(cx, ty, cw, TASKBAR_H, 8, 0xFFFFFF, 25);
+        else gfx_rect_a(cx, ty, cw, TASKBAR_H, 0xFFFFFF, 25);
+    }
+    text_draw_c(&font_small, cx, cw, ty + 5, tm, fg_primary);
+    text_draw_c(&font_small, cx, cw, ty + 21, dt, fg_primary);
+
+    /* System tray icons (network, volume, battery, action center) */
     int ix = cx - 100;
-    gfx_line(ix + 6, ty + 18, ix + 10, ty + 14, 0xFFFFFF); gfx_line(ix + 10, ty + 14, ix + 14, ty + 18, 0xFFFFFF);
-    for (int b = 0; b < 4; b++) gfx_rect(ix + 36 + b * 4, ty + 24 - b * 3, 2, 3 + b * 3, 0xFFFFFF);
-    gfx_rect(ix + 72, ty + 16, 4, 7, 0xFFFFFF); gfx_line(ix + 76, ty + 16, ix + 80, ty + 12, 0xFFFFFF); gfx_line(ix + 76, ty + 22, ix + 80, ty + 26, 0xFFFFFF); gfx_vline(ix + 80, ty + 12, 15, 0xFFFFFF);
-    gfx_vline(g_w - 6, ty + 2, TASKBAR_H - 4, 0x555555);
+    u32 tray_fg = fg_primary;
+    gfx_line(ix + 6, ty + 18, ix + 10, ty + 14, tray_fg); gfx_line(ix + 10, ty + 14, ix + 14, ty + 18, tray_fg);
+    for (int b = 0; b < 4; b++) gfx_rect(ix + 36 + b * 4, ty + 24 - b * 3, 2, 3 + b * 3, tray_fg);
+    gfx_rect(ix + 72, ty + 16, 4, 7, tray_fg); gfx_line(ix + 76, ty + 16, ix + 80, ty + 12, tray_fg); gfx_line(ix + 76, ty + 22, ix + 80, ty + 26, tray_fg); gfx_vline(ix + 80, ty + 12, 15, tray_fg);
+    gfx_vline(g_w - 6, ty + 2, TASKBAR_H - 4, border);
 }
 static void taskbar_click(int mx, int my) {
     (void)my;
