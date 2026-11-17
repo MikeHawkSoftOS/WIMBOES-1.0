@@ -77,6 +77,27 @@ static void rrect_a(int x, int y, int w, int h, int r, u32 c, int a) {
     }
 }
 
+/* Noise function for wallpaper texture */
+static int noise2d(int x, int y) {
+    int n = x * 1619 + y * 31337 + 1013;
+    n = (n << 13) ^ n;
+    return (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
+}
+
+/* Smooth noise interpolation */
+static int smooth_noise(int x, int y, int freq) {
+    int ix = x / freq, iy = y / freq;
+    int fx = (x % freq) * 256 / freq;
+    int fy = (y % freq) * 256 / freq;
+    int a = noise2d(ix, iy);
+    int b = noise2d(ix + 1, iy);
+    int c = noise2d(ix, iy + 1);
+    int d = noise2d(ix + 1, iy + 1);
+    int top = a + (b - a) * fx / 256;
+    int bot = c + (d - c) * fx / 256;
+    return top + (bot - top) * fy / 256;
+}
+
 /* blurred copy of the wallpaper for the login screen */
 static void blur_pass(const u32 *s, u32 *d, int w, int h, int horiz) {
     for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
@@ -119,50 +140,125 @@ static void wallpaper_blur(u32 *src) {
     }
     kfree(s); kfree(t);
 }
+/* Fast integer sqrt for fixed-point math */
+static int isqrt_fp(int x) {
+    int r = 0, bit = 1 << 15;
+    while (bit > x) bit >>= 2;
+    while (bit) {
+        if (x >= r + bit) { x -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+
+/* Fast exp approximation: exp(-x) for x >= 0, returns 0-255 (255 = 1.0) */
+static int exp_fp(int x) {
+    if (x <= 0) return 255;
+    if (x > 2000) return 0;
+    int r = 255;
+    for (int i = 0; i < x; i++) r = r * 993 / 1000;  /* approx e^-0.007 per step */
+    return r;
+}
+
 void wallpaper_make(int kind) {
     if (!wall) wall = kmalloc((size_t)g_w * g_h * 4);
     if (!wall) return;
     g_wallpaper = kind;
     int w = g_w, h = g_h;
-    
+
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
             u32 c;
             if (kind == 0) {
-                /* Clean slate: a restrained midnight gradient, no glowing logo. */
-                int t = (y * 150 / MAX(1, h)) + (x * 35 / MAX(1, w));
-                int r = 18 + t * 10 / 255, g = 27 + t * 22 / 255, b = 43 + t * 38 / 255;
-                int wave = (int)isqrt((u32)((x - w * 3 / 4) * (x - w * 3 / 4) +
-                                            (y - h / 3) * (y - h / 3)));
-                int glow = MAX(0, 70 - wave * 70 / MAX(1, w));
-                r = CLAMP(r + glow / 3, 0, 255); g = CLAMP(g + glow / 2, 0, 255);
-                b = CLAMP(b + glow, 0, 255);
+                /* Modern Windows 11-style bloom wallpaper - soft gradient with color bloom */
+                int fx256 = x * 256 / MAX(1, w);
+                int fy256 = y * 256 / MAX(1, h);
+
+                /* Base gradient: deep blue to purple to warm pink */
+                int base_r = 20 + (fy256 * 38) / 256 + (fx256 * 20) / 256;
+                int base_g = 15 + (fy256 * 25) / 256 + (fx256 * 13) / 256;
+                int base_b = 46 + ((256 - fy256) * 56) / 256 + (fx256 * 25) / 256;
+
+                /* Bloom 1: warm pink/orange (top-right) */
+                int dx1 = fx256 - 218; int dy1 = fy256 - 38;
+                int d1 = isqrt_fp(dx1 * dx1 + dy1 * dy1);
+                int bloom1 = exp_fp(d1 * 8 / 256) * 90 / 255;
+
+                /* Bloom 2: cyan/teal (bottom-left) */
+                int dx2 = fx256 - 38; int dy2 = fy256 - 218;
+                int d2 = isqrt_fp(dx2 * dx2 + dy2 * dy2);
+                int bloom2 = exp_fp(d2 * 8 / 256) * 64 / 255;
+
+                /* Bloom 3: purple (center-right) */
+                int dx3 = fx256 - 179; int dy3 = fy256 - 128;
+                int d3 = isqrt_fp(dx3 * dx3 + dy3 * dy3);
+                int bloom3 = exp_fp(d3 * 6 / 256) * 51 / 255;
+
+                /* Subtle noise texture */
+                int noise = smooth_noise(x, y, 64);
+                int noise_f = (noise % 512 - 256) / 128;
+
+                int r = CLAMP(base_r + bloom1 * 80 / 255 + bloom2 * 25 / 255 + bloom3 * 100 / 255 + noise_f, 0, 255);
+                int g = CLAMP(base_g + bloom1 * 76 / 255 + bloom2 * 180 / 255 + bloom3 * 51 / 255 + noise_f, 0, 255);
+                int b = CLAMP(base_b + bloom1 * 25 / 255 + bloom2 * 230 / 255 + bloom3 * 200 / 255 + noise_f, 0, 255);
+
                 c = (u32)(r << 16 | g << 8 | b);
             }
             else if (kind == 1) {
-                /* macOS style - purple/pink gradient */
-                int t = (y * 200 / h + x * 55 / w);
-                int r = 100 + t * 100 / 255;
-                int g = 50 + t * 80 / 255;
-                int b = 150 + t * 80 / 255;
-                
-                /* Noise texture */
-                int noise = ((x * 127 + y * 311) & 255) - 128;
-                r = CLAMP(r + noise / 32, 0, 255);
-                g = CLAMP(g + noise / 32, 0, 255);
-                b = CLAMP(b + noise / 32, 0, 255);
-                
+                /* Light theme wallpaper - clean, minimal, professional */
+                int fx256 = x * 256 / MAX(1, w);
+                int fy256 = y * 256 / MAX(1, h);
+
+                /* Soft warm gray gradient with subtle color hints */
+                int base_r = 245 + (fy256 * 5) / 256 - (fx256 * 2) / 256;
+                int base_g = 243 + (fy256 * 5) / 256;
+                int base_b = 238 + ((256 - fy256) * 7) / 256 + (fx256 * 2) / 256;
+
+                /* Very subtle bloom - just a whisper */
+                int dx1 = fx256 - 230; int dy1 = fy256 - 25;
+                int d1 = isqrt_fp(dx1 * dx1 + dy1 * dy1);
+                int bloom1 = exp_fp(d1 * 12 / 256) * 20 / 255;
+
+                int dx2 = fx256 - 25; int dy2 = fy256 - 230;
+                int d2 = isqrt_fp(dx2 * dx2 + dy2 * dy2);
+                int bloom2 = exp_fp(d2 * 12 / 256) * 15 / 255;
+
+                int noise = smooth_noise(x + 1000, y + 1000, 128);
+                int noise_f = (noise % 512 - 256) / 256;
+
+                int r = CLAMP(base_r + bloom1 * 128 / 255 + bloom2 * 25 / 255 + noise_f, 0, 255);
+                int g = CLAMP(base_g + bloom1 * 51 / 255 + bloom2 * 100 / 255 + noise_f, 0, 255);
+                int b = CLAMP(base_b + bloom1 * 25 / 255 + bloom2 * 153 / 255 + noise_f, 0, 255);
+
                 c = (u32)(r << 16 | g << 8 | b);
             }
             else {
-                /* Dark theme */
-                int dx = x - w / 2, dy = y - h / 2;
-                int d = MAX((dx < 0 ? -dx : dx), (dy < 0 ? -dy : dy));
-                int i = d < w / 2 ? (w / 2 - d) * 50 / (w / 2) : 0;
-                
-                int r = 14 + i / 3;
-                int g = 14 + i / 3; 
-                int b = 24 + i / 2;
+                /* Dark theme wallpaper - deep, rich, elegant */
+                int fx256 = x * 256 / MAX(1, w);
+                int fy256 = y * 256 / MAX(1, h);
+
+                /* Deep charcoal base with subtle blue-purple undertones */
+                int base_r = 13 + (fy256 * 7) / 256;
+                int base_g = 13 + (fy256 * 10) / 256;
+                int base_b = 23 + ((256 - fy256) * 15) / 256 + (fx256 * 5) / 256;
+
+                /* Subtle bloom for depth */
+                int dx1 = fx256 - 205; int dy1 = fy256 - 51;
+                int d1 = isqrt_fp(dx1 * dx1 + dy1 * dy1);
+                int bloom1 = exp_fp(d1 * 6 / 256) * 38 / 255;
+
+                int dx2 = fx256 - 51; int dy2 = fy256 - 205;
+                int d2 = isqrt_fp(dx2 * dx2 + dy2 * dy2);
+                int bloom2 = exp_fp(d2 * 6 / 256) * 30 / 255;
+
+                int noise = smooth_noise(x + 2000, y + 2000, 96);
+                int noise_f = (noise % 512 - 256) / 170;
+
+                int r = CLAMP(base_r + bloom1 * 153 / 255 + bloom2 * 25 / 255 + noise_f, 0, 255);
+                int g = CLAMP(base_g + bloom1 * 51 / 255 + bloom2 * 128 / 255 + noise_f, 0, 255);
+                int b = CLAMP(base_b + bloom1 * 25 / 255 + bloom2 * 180 / 255 + noise_f, 0, 255);
+
                 c = (u32)(r << 16 | g << 8 | b);
             }
             wall[y * w + x] = c;
@@ -500,7 +596,7 @@ static struct { bool open; int x, y, n, act[6], item; const char *label[6]; } ct
 static void ctx_add(int act, const char *l) { ctx.act[ctx.n] = act; ctx.label[ctx.n++] = l; }
 static void ctx_show(int x, int y) { ctx.open = true; ctx.x = MIN(x, g_w - 232); ctx.y = MIN(y, g_h - TASKBAR_H - ctx.n * 30 - 10); }
 static void ctx_draw(void) {
-    int w = 230, h = ctx.n * 30 + 8;
+    int w = 240, h = ctx.n * 32 + 8;
 
     /* Get theme colors */
     Theme *t = (g_theme >= 0 && g_theme < THEME_MAX && g_themes[g_theme].used) ? &g_themes[g_theme] : 0;
@@ -508,26 +604,37 @@ static void ctx_draw(void) {
     u32 menu_border = t ? t->border : 0xA0A0A0;
     u32 hover_bg = t ? t->hover : 0xD6D6D6;
     u32 fg_primary = t ? t->fg_primary : 0x000000;
+    u32 fg_secondary = t ? t->fg_secondary : 0x333333;
     u32 shadow = t ? t->shadow : 0x000000;
-    int rounding = t ? t->rounding : 8;  /* Context menus always have at least 8px rounding */
+    int rounding = t ? t->rounding : 8;
+    bool transparency = t ? t->transparency : false;
+    int menu_alpha = transparency ? 250 : 255;
 
-    /* Shadow */
-    gfx_shadow(ctx.x, ctx.y, w, h, rounding, 8, shadow, 60);
+    /* Layered shadow */
+    gfx_shadow(ctx.x, ctx.y, w, h, rounding, 16, shadow, 60);
+    gfx_shadow(ctx.x, ctx.y + 2, w, h, rounding, 6, shadow, 30);
 
-    /* Background with rounded corners */
-    gfx_rrect(ctx.x, ctx.y, w, h, rounding, menu_bg);
-    gfx_rrect_frame(ctx.x, ctx.y, w, h, rounding, menu_border);
+    /* Background */
+    if (rounding > 0) {
+        gfx_rrect_a(ctx.x, ctx.y, w, h, rounding, menu_bg, menu_alpha);
+        gfx_rrect_frame_a(ctx.x, ctx.y, w, h, rounding, menu_border, menu_alpha);
+    } else {
+        gfx_rect(ctx.x, ctx.y, w, h, menu_bg);
+        gfx_frame(ctx.x, ctx.y, w, h, menu_border);
+    }
 
     for (int i = 0; i < ctx.n; i++) {
-        int y = ctx.y + 4 + i * 30;
-        bool hov = in_rect(g_mx, g_my, ctx.x + 2, y, w - 4, 30);
+        int y = ctx.y + 4 + i * 32;
+        bool hov = in_rect(g_mx, g_my, ctx.x + 2, y, w - 4, 32);
         if (hov) {
             int item_rounding = 6;
             if (i == 0 && i == ctx.n - 1) item_rounding = rounding;
             else if (i == 0) item_rounding = rounding;
             else if (i == ctx.n - 1) item_rounding = rounding;
-            gfx_rrect(ctx.x + 2, y, w - 4, 30, item_rounding, hover_bg);
+            if (rounding > 0) gfx_rrect_a(ctx.x + 2, y, w - 4, 32, item_rounding, hover_bg, 255);
+            else gfx_rect(ctx.x + 2, y, w - 4, 32, hover_bg);
         }
+
         /* Icon based on action */
         int icon = ICON_FILE;
         if (ctx.act[i] == CA_REFRESH) icon = ICON_REFRESH;
@@ -538,8 +645,13 @@ static void ctx_draw(void) {
         else if (ctx.act[i] == CA_DELETE) icon = ICON_TRASH;
         else if (ctx.act[i] == CA_TERMINAL) icon = ICON_TERM;
         else if (ctx.act[i] == CA_EMPTYBIN) icon = ICON_BIN;
-        icon_draw(icon, ctx.x + 8, y + 7, 16);
-        text_draw_vc(&font_ui, ctx.x + 32, y, 30, ctx.label[i], fg_primary);
+        icon_draw(icon, ctx.x + 10, y + 8, 16);
+        text_draw_vc(&font_ui, ctx.x + 34, y, 32, ctx.label[i], fg_primary);
+
+        /* Separator lines between items */
+        if (i < ctx.n - 1) {
+            gfx_hline(ctx.x + 10, y + 32, w - 20, menu_border);
+        }
     }
 }
 static void ctx_run(int act) {
@@ -606,32 +718,55 @@ static void start_draw(void) {
     bool transparency = t ? t->transparency : false;
     int menu_alpha = transparency ? 240 : 255;
 
-    /* Draw start menu background with shadow and rounded corners */
+    /* Draw start menu background with layered shadow and rounded corners */
     if (rounding > 0) {
-        /* Shadow */
-        gfx_shadow(0, sy, SM_W, sh, rounding, 12, shadow, 80);
-        /* Background */
+        /* Layered shadow for depth */
+        gfx_shadow(0, sy, SM_W, sh, rounding, 20, shadow, 70);
+        gfx_shadow(0, sy + 2, SM_W, sh, rounding, 8, shadow, 40);
+
+        /* Background with mica/acrylic effect */
         gfx_rrect_a(0, sy, SM_W, sh, rounding, startmenu_bg, menu_alpha);
+
+        /* Subtle top highlight for glass effect */
+        if (transparency) {
+            for (int i = 0; i < 3; i++) {
+                int alpha = (3 - i) * 10;
+                gfx_hline(rounding, sy + i, SM_W - rounding * 2, col_lighten(startmenu_bg, 40), alpha);
+            }
+        }
+
         gfx_rrect_frame_a(0, sy, SM_W, sh, rounding, border, menu_alpha);
-        /* Rail background */
+
+        /* Rail background - slightly darker */
         gfx_rrect_a(0, sy, SM_RAIL, sh, rounding, startmenu_rail, menu_alpha);
+        gfx_vline(SM_RAIL - 1, sy, sh, border);
     } else {
         gfx_rect_a(0, sy, SM_W, sh, startmenu_bg, menu_alpha);
         gfx_rect_a(0, sy, SM_RAIL, sh, startmenu_rail, menu_alpha);
+        gfx_vline(SM_RAIL - 1, sy, sh, border);
     }
 
-    /* Hamburger menu lines */
-    for (int i = 0; i < 3; i++) gfx_rect(15, sy + 17 + i * 6, 18, 2, fg_muted);
+    /* Hamburger menu lines - cleaner */
+    for (int i = 0; i < 3; i++) gfx_rect(15, sy + 16 + i * 7, 18, 2, fg_muted);
 
-    static const int ricon[4] = { ICON_POWER, ICON_GEAR, ICON_DOCS, ICON_USER };
+    /* Rail icons with labels */
+    static const struct { int icon; const char *label; } rail_items[4] = {
+        { ICON_POWER, "Power" }, { ICON_GEAR, "Settings" }, { ICON_DOCS, "Files" }, { ICON_USER, "Account" }
+    };
     for (int k = 0; k < 4; k++) {
         int y = rail_y(k);
-        if (in_rect(g_mx, g_my, 0, y, SM_RAIL, 48) && !sm_popup) {
-            if (rounding > 0) gfx_rrect_a(0, y, SM_RAIL, 48, 8, 0xFFFFFF, 30);
-            else gfx_rect_a(0, y, SM_RAIL, 48, 0xFFFFFF, 30);
+        bool hov = in_rect(g_mx, g_my, 0, y, SM_RAIL, 48) && !sm_popup;
+        if (hov) {
+            if (rounding > 0) gfx_rrect_a(0, y, SM_RAIL, 48, 8, 0xFFFFFF, 25);
+            else gfx_rect_a(0, y, SM_RAIL, 48, 0xFFFFFF, 25);
         }
-        if (k == 3) avatar_draw(24, y + 24, 12, g_user >= 0 ? g_users[g_user].color : 0x777777);
-        else icon_draw(k == 1 ? ICON_GEAR : ricon[k], 12, y + 12, 24);
+        if (k == 3) {
+            avatar_draw(24, y + 24, 12, g_user >= 0 ? g_users[g_user].color : 0x777777);
+        } else {
+            icon_draw(rail_items[k].icon, 12, y + 8, 32);
+        }
+        /* Show label on hover */
+        if (hov) text_draw_vc(&font_small, SM_RAIL + 8, y, 48, rail_items[k].label, fg_secondary);
     }
 
     SMEnt e[APP_COUNT * 2 + 2]; int n = sm_build(e);
@@ -642,7 +777,8 @@ static void start_draw(void) {
             char hd[16]; if (e[i].hdr == '*') kstrcpy(hd, "Best match", sizeof hd); else { hd[0] = e[i].hdr; hd[1] = 0; }
             text_draw_vc(&font_ui_b, SM_RAIL + 14, e[i].y, 28, hd, fg_secondary);
         } else {
-            if (in_rect(g_mx, g_my, SM_RAIL, e[i].y, SM_APPS_W, 40) && !sm_popup) {
+            bool hov = in_rect(g_mx, g_my, SM_RAIL, e[i].y, SM_APPS_W, 40) && !sm_popup;
+            if (hov) {
                 if (rounding > 0) gfx_rrect_a(SM_RAIL, e[i].y, SM_APPS_W, 40, 8, hover_bg, 255);
                 else gfx_rect(SM_RAIL, e[i].y, SM_APPS_W, 40, hover_bg);
             }
@@ -652,16 +788,18 @@ static void start_draw(void) {
     }
     gfx_clip_pop(list_clip);
 
-    text_draw(&font_ui_b, 316, sy + 16, "Productivity", fg_secondary);
-    text_draw(&font_ui_b, 316, sy + 270, "Explore", fg_secondary);
+    /* Pinned/Recommended section headers */
+    text_draw(&font_ui_b, 316, sy + 12, "Pinned", fg_secondary);
+    text_draw(&font_ui_b, 316, sy + 260, "Recommended", fg_secondary);
 
     for (int i = 0; i < ARRLEN(tiles); i++) {
         int x, y, w; tile_rect(i, &x, &y, &w);
         bool hov = in_rect(g_mx, g_my, x, y, w, 100) && !sm_popup;
-        u32 tile_bg = tiles[i].app < 0 ? accent : (hov ? col_lighten(accent, 20) : accent);
+        u32 tile_bg = tiles[i].app < 0 ? accent : (hov ? col_lighten(accent, 25) : accent);
         if (rounding > 0) {
+            gfx_shadow(x, y, w, 100, 12, 8, 0x000000, 40);
             gfx_rrect(x, y, w, 100, 12, tile_bg);
-            if (hov) gfx_rrect_frame(x, y, w, 100, 12, 0xDDDDDD);
+            if (hov) gfx_rrect_frame(x, y, w, 100, 12, 0xFFFFFF);
         } else {
             gfx_rect(x, y, w, 100, tile_bg);
             if (hov) gfx_frame(x, y, w, 100, 0xDDDDDD);
@@ -669,23 +807,32 @@ static void start_draw(void) {
         if (tiles[i].app < 0) {
             int wd = weekday(rtc.year, rtc.month, rtc.day);
             char b[24]; ksnprintf(b, sizeof b, "%d", rtc.day);
-            text_draw(&font_ui_b, x + 10, y + 10, wd_names[wd], fg_primary);
-            text_draw(&font_big, x + 10, y + 28, b, fg_primary);
+            text_draw(&font_ui_b, x + 12, y + 10, wd_names[wd], fg_primary);
+            text_draw(&font_big, x + 12, y + 28, b, fg_primary);
             ksnprintf(b, sizeof b, "%s %d", mon_names[(rtc.month - 1 + 12) % 12], rtc.year);
-            text_draw(&font_small, x + 10, y + 78, b, fg_primary);
+            text_draw(&font_small, x + 12, y + 78, b, fg_primary);
             icon_draw(ICON_CALENDAR, x + w - 50, y + 20, 36);
         } else {
-            icon_draw(g_apps[tiles[i].app].icon, x + (w - 40) / 2, y + 16, 40);
-            { char tn[32]; text_fit(&font_small, g_apps[tiles[i].app].name, w - 12, tn, sizeof tn); text_draw(&font_small, x + 8, y + 100 - 22, tn, fg_primary); }
+            icon_draw(g_apps[tiles[i].app].icon, x + (w - 48) / 2, y + 12, 48);
+            { char tn[32]; text_fit(&font_small, g_apps[tiles[i].app].name, w - 16, tn, sizeof tn); text_draw(&font_small, x + 8, y + 100 - 22, tn, fg_primary); }
         }
     }
     if (sm_popup) {
         static const char *const up[2] = { "Change account settings", "Sign out" }, *const pp[2] = { "Shut down", "Restart" };
         const char *const *it = sm_popup == 1 ? up : pp;
         int py = rail_y(sm_popup == 1 ? 3 : 0) - 2 * 40 + 48;
-        gfx_rect(4, py, 230, 80, 0x2B2B2B); gfx_frame(4, py, 230, 80, 0x555555);
+        if (rounding > 0) {
+            gfx_shadow(4, py, 230, 80, 8, 12, 0x000000, 80);
+            gfx_rrect(4, py, 230, 80, 8, 0x2B2B2B);
+            gfx_rrect_frame(4, py, 230, 80, 8, 0x555555);
+        } else {
+            gfx_rect(4, py, 230, 80, 0x2B2B2B); gfx_frame(4, py, 230, 80, 0x555555);
+        }
         for (int i = 0; i < 2; i++) {
-            if (in_rect(g_mx, g_my, 4, py + i * 40, 230, 40)) gfx_rect(5, py + i * 40, 228, 40, 0x434343);
+            if (in_rect(g_mx, g_my, 4, py + i * 40, 230, 40)) {
+                if (rounding > 0) gfx_rrect_a(5, py + i * 40, 228, 40, 6, 0xFFFFFF, 25);
+                else gfx_rect(5, py + i * 40, 228, 40, 0x434343);
+            }
             text_draw_vc(&font_ui, 18, py + i * 40, 40, it[i], 0xFFFFFF);
         }
     }
@@ -775,6 +922,7 @@ static void taskbar_draw(void) {
         int pill_w = 48 + tb_search_w() + 8 + 48 * tb_slots((int[APP_COUNT]){0}) + 100;
         int pill_x = (g_w - pill_w) / 2;
         if (rounding > 0) {
+            gfx_shadow(pill_x, ty + 3, pill_w, TASKBAR_H - 6, rounding, 12, 0x000000, 80);
             gfx_rrect_a(pill_x, ty + 3, pill_w, TASKBAR_H - 6, rounding, taskbar_bg, taskbar_alpha);
             gfx_rrect_frame_a(pill_x, ty + 3, pill_w, TASKBAR_H - 6, rounding, border, taskbar_alpha);
         } else {
@@ -782,23 +930,38 @@ static void taskbar_draw(void) {
             gfx_frame(pill_x, ty + 3, pill_w, TASKBAR_H - 6, border);
         }
     } else if (g_shell_style == 1) {
-        /* Windows 11 style - centered with rounded corners */
+        /* Windows 11 style - floating centered taskbar with mica/acrylic effect */
         if (rounding > 0) {
-            /* Floating taskbar with rounded corners */
-            int tb_margin = 8;
+            int tb_margin = 12;
             int tb_w = g_w - tb_margin * 2;
             int tb_h = TASKBAR_H - 4;
             int tb_x = tb_margin;
             int tb_y = ty + 2;
-            gfx_shadow(tb_x, tb_y, tb_w, tb_h, rounding, 8, 0x000000, 60);
+
+            /* Layered shadow for depth */
+            gfx_shadow(tb_x, tb_y, tb_w, tb_h, rounding, 16, 0x000000, 50);
+            gfx_shadow(tb_x, tb_y + 1, tb_w, tb_h, rounding, 8, 0x000000, 30);
+
+            /* Mica/acrylic background: base color + subtle noise overlay */
             gfx_rrect_a(tb_x, tb_y, tb_w, tb_h, rounding, taskbar_bg, taskbar_alpha);
+
+            /* Subtle top highlight for glass effect */
+            if (transparency) {
+                for (int i = 0; i < 3; i++) {
+                    int alpha = (3 - i) * 8;
+                    gfx_hline(tb_x + rounding, tb_y + i, tb_w - rounding * 2, col_lighten(taskbar_bg, 30), alpha);
+                }
+            }
+
+            /* Border */
             gfx_rrect_frame_a(tb_x, tb_y, tb_w, tb_h, rounding, border, taskbar_alpha);
         } else {
             gfx_rect_a(0, ty, g_w, TASKBAR_H, taskbar_bg, taskbar_alpha);
         }
     } else {
-        /* Windows 10 style - full width */
+        /* Windows 10 style - full width with subtle separator */
         gfx_rect_a(0, ty, g_w, TASKBAR_H, taskbar_bg, taskbar_alpha);
+        gfx_hline(0, ty, g_w, border);
     }
 
     bool sh = in_rect(g_mx, g_my, 0, ty, 48, TASKBAR_H);
@@ -811,59 +974,75 @@ static void taskbar_draw(void) {
         if (start_open) {
             gfx_rrect(start_x, ty, start_w, TASKBAR_H, rounding, col_lighten(accent, 60));
         } else if (sv) {
-            gfx_rrect_a(start_x, ty, start_w, TASKBAR_H, rounding, 0xFFFFFF, sv * 22 / 255);
+            gfx_rrect_a(start_x, ty, start_w, TASKBAR_H, rounding, 0xFFFFFF, sv * 25 / 255);
         }
     } else {
         if (start_open) gfx_rect(start_x, ty, start_w, TASKBAR_H, 0x333333); else if (sv) gfx_rect_a(start_x, ty, start_w, TASKBAR_H, 0xFFFFFF, sv * 22 / 255);
     }
     logo_draw(start_x + 14, ty + 10, 20, g_shell_style == 0 ? accent : (sh && !start_open ? accent : fg_primary));
 
-    /* Search box */
-    int sx = start_x + start_w, sw = tb_search_w();
-    int search_bg = start_open ? 0xFFFFFF : (transparency ? 0xFFFFFF : 0xE6E6E6);
-    int search_alpha = start_open ? 255 : (transparency ? 180 : 255);
-    if (rounding > 0) {
-        gfx_rrect_a(sx, ty + 4, sw, 32, 16, search_bg, search_alpha);
+    /* Search box - Windows 11 style pill */
+    int sx = start_x + start_w + 8, sw = tb_search_w();
+    if (g_shell_style == 1) {
+        int search_bg = 0xFFFFFF;
+        int search_alpha = transparency ? 180 : 255;
+        if (start_open) { search_bg = 0xFFFFFF; search_alpha = 255; }
+        if (rounding > 0) {
+            gfx_rrect_a(sx, ty + 4, sw, 32, 16, search_bg, search_alpha);
+            if (start_open) gfx_rrect_frame_a(sx, ty + 4, sw, 32, 16, accent, 255);
+        } else {
+            gfx_rect(sx, ty + 4, sw, 32, search_bg);
+        }
     } else {
-        gfx_rect(sx, ty + 4, sw, 32, search_bg);
+        int search_bg = start_open ? 0xFFFFFF : (transparency ? 0xFFFFFF : 0xE6E6E6);
+        int search_alpha = start_open ? 255 : (transparency ? 180 : 255);
+        if (rounding > 0) gfx_rrect_a(sx, ty + 4, sw, 32, 16, search_bg, search_alpha);
+        else gfx_rect(sx, ty + 4, sw, 32, search_bg);
     }
     tb_magnifier(sx + 8, ty + 11);
     if (start_open && sm_qlen) text_draw_vc(&font_ui, sx + 36, ty + 4, 32, sm_query, 0x000000);
     else text_draw_vc(&font_ui, sx + 36, ty + 4, 32, "Type here to search", fg_muted);
     if (start_open && ui_blink()) gfx_rect(sx + 36 + (sm_qlen ? text_width(&font_ui, sm_query) : 0), ty + 11, 1, 18, 0x000000);
 
-    /* App buttons */
+    /* App buttons - centered group */
     int apps[APP_COUNT], n = tb_slots(apps); Window *top = wm_top();
+    int group_w = n * 48;
+    int group_x = (g_shell_style == 1) ? ((g_w - group_w) / 2) : tb_apps_x();
+
     for (int i = 0; i < n; i++) {
-        int x = tb_apps_x() + i * 48, cnt = wm_count_app(apps[i]);
+        int x = group_x + i * 48, cnt = wm_count_app(apps[i]);
         bool act = top && top->app == apps[i], hov = in_rect(g_mx, g_my, x, ty, 48, TASKBAR_H) && !start_open && !ctx.open;
         int hv = tb_hv[i] = approach(tb_hv[i], hov ? 255 : 0, 110);
-        int al = (act ? 40 : 0) + hv * 25 / 255;
+        int al = (act ? 50 : 0) + hv * 30 / 255;
         if (al) {
-            if (rounding > 0) gfx_rrect_a(x, ty, 48, TASKBAR_H, 8, 0xFFFFFF, al);
-            else gfx_rect_a(x, ty, 48, TASKBAR_H, 0xFFFFFF, al);
+            if (rounding > 0) gfx_rrect_a(x, ty + 2, 48, TASKBAR_H - 4, 8, 0xFFFFFF, al);
+            else gfx_rect_a(x, ty + 2, 48, TASKBAR_H - 4, 0xFFFFFF, al);
         }
         icon_draw(g_apps[apps[i]].icon, x + 12, ty + 8 - hv * 2 / 255, 24);
         int iw = tb_iw[i] = approach(tb_iw[i], cnt ? (act ? 44 : 24) : 0, 100);
-        if (iw > 0) gfx_rect(x + (48 - iw) / 2, ty + TASKBAR_H - 3, iw, 2, act ? 0x8CCBFF : 0x76B9ED);
+        if (iw > 0) gfx_rect(x + (48 - iw) / 2, ty + TASKBAR_H - 4, iw, 3, act ? accent : col_lighten(accent, 40));
     }
 
-    /* Clock/date */
+    /* Clock/date - Windows 11 style */
     char tm[16], dt[16]; fmt_time(tm, sizeof tm); fmt_date(dt, sizeof dt);
-    int cw = MAX(text_width(&font_small, tm), text_width(&font_small, dt)) + 22, cx = g_w - 6 - cw;
+    int cw = MAX(text_width(&font_small, tm), text_width(&font_small, dt)) + 24, cx = g_w - 12 - cw;
     if (in_rect(g_mx, g_my, cx, ty, cw, TASKBAR_H)) {
-        if (rounding > 0) gfx_rrect_a(cx, ty, cw, TASKBAR_H, 8, 0xFFFFFF, 25);
-        else gfx_rect_a(cx, ty, cw, TASKBAR_H, 0xFFFFFF, 25);
+        if (rounding > 0) gfx_rrect_a(cx, ty, cw, TASKBAR_H, 8, 0xFFFFFF, 30);
+        else gfx_rect_a(cx, ty, cw, TASKBAR_H, 0xFFFFFF, 30);
     }
-    text_draw_c(&font_small, cx, cw, ty + 5, tm, fg_primary);
-    text_draw_c(&font_small, cx, cw, ty + 21, dt, fg_primary);
+    text_draw_c(&font_small, cx, cw, ty + 4, tm, fg_primary);
+    text_draw_c(&font_small, cx, cw, ty + 20, dt, fg_muted);
 
-    /* System tray icons (network, volume, battery, action center) */
+    /* System tray - cleaner icons */
     int ix = cx - 100;
     u32 tray_fg = fg_primary;
+    /* Network */
     gfx_line(ix + 6, ty + 18, ix + 10, ty + 14, tray_fg); gfx_line(ix + 10, ty + 14, ix + 14, ty + 18, tray_fg);
+    /* Volume */
     for (int b = 0; b < 4; b++) gfx_rect(ix + 36 + b * 4, ty + 24 - b * 3, 2, 3 + b * 3, tray_fg);
+    /* Battery */
     gfx_rect(ix + 72, ty + 16, 4, 7, tray_fg); gfx_line(ix + 76, ty + 16, ix + 80, ty + 12, tray_fg); gfx_line(ix + 76, ty + 22, ix + 80, ty + 26, tray_fg); gfx_vline(ix + 80, ty + 12, 15, tray_fg);
+    /* Action center separator */
     gfx_vline(g_w - 6, ty + 2, TASKBAR_H - 4, border);
 }
 static void taskbar_click(int mx, int my) {
