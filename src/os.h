@@ -342,10 +342,6 @@ bool ti_key(TextInput *t, int key, int mod);             /* true if consumed */
 void ti_draw(TextInput *t, int x, int y, int w, int h, const char *placeholder, bool blink);
 
 /* ---------------------------------------------------------------- window manager */
-#define MAX_WIN 24
-#define TITLE_H 31
-#define TASKBAR_H 40
-enum { M_MOVE, M_DOWN, M_UP, M_DBL, M_WHEEL, M_RIGHT };
 extern Window g_win[MAX_WIN];
 Window *wm_create(int app, const char *title, int icon, int x, int y, int w, int h);
 void wm_close(Window *w);
