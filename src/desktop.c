@@ -604,7 +604,6 @@ static void ctx_draw(void) {
     u32 menu_border = t ? t->border : 0xA0A0A0;
     u32 hover_bg = t ? t->hover : 0xD6D6D6;
     u32 fg_primary = t ? t->fg_primary : 0x000000;
-    u32 fg_secondary = t ? t->fg_secondary : 0x333333;
     u32 shadow = t ? t->shadow : 0x000000;
     int rounding = t ? t->rounding : 8;
     bool transparency = t ? t->transparency : false;
@@ -731,7 +730,7 @@ static void start_draw(void) {
         if (transparency) {
             for (int i = 0; i < 3; i++) {
                 int alpha = (3 - i) * 10;
-                gfx_hline(rounding, sy + i, SM_W - rounding * 2, col_lighten(startmenu_bg, 40), alpha);
+                gfx_rect_a(rounding, sy + i, SM_W - rounding * 2, 1, col_lighten(startmenu_bg, 40), alpha);
             }
         }
 
@@ -949,7 +948,7 @@ static void taskbar_draw(void) {
             if (transparency) {
                 for (int i = 0; i < 3; i++) {
                     int alpha = (3 - i) * 8;
-                    gfx_hline(tb_x + rounding, tb_y + i, tb_w - rounding * 2, col_lighten(taskbar_bg, 30), alpha);
+                    gfx_rect_a(tb_x + rounding, tb_y + i, tb_w - rounding * 2, 1, col_lighten(taskbar_bg, 30), alpha);
                 }
             }
 
