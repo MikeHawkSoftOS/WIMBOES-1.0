@@ -134,7 +134,8 @@ void theme_to_json(const Theme *t, char *buf, int cap);
 #define WIDGET_MAX 32
 #define WIDGET_NAME_MAX 24
 enum { WIDGET_CLOCK, WIDGET_SYSMON, WIDGET_NOTES, WIDGET_CALENDAR, WIDGET_WEATHER, WIDGET_LAUNCHER, WIDGET_CUSTOM };
-typedef struct {
+typedef struct Widget Widget;
+struct Widget {
     bool used;
     int type;
     char name[WIDGET_NAME_MAX];
@@ -143,12 +144,12 @@ typedef struct {
     bool pinned;          /* stay on top of desktop icons */
     bool locked;          /* prevent moving */
     void *data;           /* type-specific data */
-    void (*draw)(struct Widget *, int cx, int cy, int cw, int ch);
-    void (*mouse)(struct Widget *, int ev, int x, int y, int btn);
-    void (*key)(struct Widget *, int key, int mod);
-    void (*tick)(struct Widget *);
-    void (*close)(struct Widget *);
-} Widget;
+    void (*draw)(Widget *, int cx, int cy, int cw, int ch);
+    void (*mouse)(Widget *, int ev, int x, int y, int btn);
+    void (*key)(Widget *, int key, int mod);
+    void (*tick)(Widget *);
+    void (*close)(Widget *);
+};
 extern Widget g_widgets[WIDGET_MAX];
 Widget *widget_create(int type, int x, int y);
 void widget_close(Widget *w);
@@ -158,6 +159,13 @@ void widget_key_event(int key, int mod);
 void widget_tick_all(void);
 void widgets_save(void);
 void widgets_load(void);
+
+/* ---------------------------------------------------------------- window manager (forward decls for desktop/snap) */
+#define MAX_WIN 24
+#define TITLE_H 31
+#define TASKBAR_H 40
+enum { M_MOVE, M_DOWN, M_UP, M_DBL, M_WHEEL, M_RIGHT };
+typedef struct Window Window;
 
 /* ---------------------------------------------------------------- virtual desktops */
 #define DESKTOP_MAX 8
@@ -187,6 +195,22 @@ void snap_update(Window *w, int mx, int my);
 int  snap_zone_at(int mx, int my);
 void snap_apply(Window *w, int zone);
 void snap_draw_hints(void);
+
+/* Window struct definition (moved up so desktop/snap can use it) */
+struct Window {
+    bool used, minimized, maximized;
+    int x, y, w, h, rx, ry, rw, rh, minw, minh;
+    char title[64]; int icon, app, id;
+    void *priv;
+    /* Animation state */
+    float anim_x, anim_y, anim_w, anim_h, anim_alpha;
+    u32 anim_start;
+    bool animating;
+    void (*draw)(struct Window *, int cx, int cy, int cw, int ch);
+    void (*mouse)(struct Window *, int ev, int x, int y, int btn);   /* client-relative */
+    void (*key)(struct Window *, int key, int mod);
+    void (*close)(struct Window *);
+};
 
 /* ---------------------------------------------------------------- command palette / launcher */
 #define CMD_MAX 64
@@ -308,11 +332,10 @@ void avatar_draw(int cx, int cy, int r, u32 color);
 void logo_draw(int x, int y, int size, u32 color);
 bool in_rect(int px, int py, int x, int y, int w, int h);
 extern int g_mx, g_my, g_mb;
-struct Window;
-extern struct Window *g_hover_win;
-bool ui_hover(struct Window *w, int x, int y, int bw, int bh);
-bool ui_button(struct Window *w, int x, int y, int bw, int bh, const char *label, bool primary);
-bool ui_toggle(struct Window *w, int x, int y, bool on);
+extern Window *g_hover_win;
+bool ui_hover(Window *w, int x, int y, int bw, int bh);
+bool ui_button(Window *w, int x, int y, int bw, int bh, const char *label, bool primary);
+bool ui_toggle(Window *w, int x, int y, bool on);
 typedef struct { char buf[32]; int len; bool pass; bool focus; } TextInput;
 void ti_clear(TextInput *t);
 bool ti_key(TextInput *t, int key, int mod);             /* true if consumed */
@@ -323,20 +346,6 @@ void ti_draw(TextInput *t, int x, int y, int w, int h, const char *placeholder, 
 #define TITLE_H 31
 #define TASKBAR_H 40
 enum { M_MOVE, M_DOWN, M_UP, M_DBL, M_WHEEL, M_RIGHT };
-typedef struct Window {
-    bool used, minimized, maximized;
-    int x, y, w, h, rx, ry, rw, rh, minw, minh;
-    char title[64]; int icon, app, id;
-    void *priv;
-    /* Animation state */
-    float anim_x, anim_y, anim_w, anim_h, anim_alpha;
-    u32 anim_start;
-    bool animating;
-    void (*draw)(struct Window *, int cx, int cy, int cw, int ch);
-    void (*mouse)(struct Window *, int ev, int x, int y, int btn);   /* client-relative */
-    void (*key)(struct Window *, int key, int mod);
-    void (*close)(struct Window *);
-} Window;
 extern Window g_win[MAX_WIN];
 Window *wm_create(int app, const char *title, int icon, int x, int y, int w, int h);
 void wm_close(Window *w);
