@@ -173,7 +173,6 @@ static void st_draw(Window *w, int cx, int cy, int cw, int ch) {
         ui_toggle(w, x + 300, y, true);
     } else if (s->page == 10) { /* Themes */
         text_draw(&font_ui_b, x, y, "Select a theme", 0x000000); y += 28;
-        Theme *t = &g_themes[g_theme];
         for (int i = 0; i < 5; i++) {
             if (!g_themes[i].used) continue;
             int sx = x + (i % 3) * 180;
@@ -375,7 +374,6 @@ static void st_mouse(Window *w, int ev, int x, int y, int btn) {
         }
     } else if (s->page == 12) { /* Start - toggles */ }
     else if (s->page == 13) { /* Taskbar */
-        static const char *aligns[2] = { "Center (Windows 11)", "Left (Windows 10)" };
         for (int i = 0; i < 2; i++) {
             int sx = bx + i * 180;
             if (in_rect(x, y, sx, by + 28 + 28, 160, 36)) {
