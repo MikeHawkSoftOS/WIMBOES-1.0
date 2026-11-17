@@ -127,6 +127,7 @@ extern bool g_reduced_motion;
 void theme_init(void);
 void theme_load(int idx);
 void theme_save_current(void);
+void theme_load_saved(void);
 void theme_apply_colors_public(void);
 bool theme_parse_json(const char *json, Theme *t);
 void theme_to_json(const Theme *t, char *buf, int cap);

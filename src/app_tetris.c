@@ -9,7 +9,7 @@
 
 static const u32 colors[8] = { 0x000000, 0x00F0F0, 0xF0A000, 0x0000F0, 0xF0F000, 0x00F000, 0xF000F0, 0xF00000 };
 
-static const char shapes[7][16] = {
+static const char shapes[7][17] = {
     "0100010001000100", /* I */
     "0000011001100000", /* O */
     "0000011011000000", /* S */

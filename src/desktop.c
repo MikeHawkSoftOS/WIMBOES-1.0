@@ -761,8 +761,6 @@ static void taskbar_draw(void) {
     /* Get theme colors */
     Theme *t = (g_theme >= 0 && g_theme < THEME_MAX && g_themes[g_theme].used) ? &g_themes[g_theme] : 0;
     u32 taskbar_bg = t ? t->taskbar_bg : (g_shell_style == 0 ? 0xF5F5F5 : (g_shell_style == 1 ? 0x17191E : 0x0C0C0C));
-    u32 startmenu_bg = t ? t->startmenu_bg : 0x1B1B1B;
-    u32 startmenu_rail = t ? t->startmenu_rail : 0x000000;
     u32 accent = g_accent;
     u32 fg_primary = t ? t->fg_primary : 0xFFFFFF;
     u32 fg_muted = t ? t->fg_muted : 0x888888;
